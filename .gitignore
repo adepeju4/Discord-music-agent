@@ -4,5 +4,14 @@
 # node modules
 node_modules
 
-# env 
+# env
 .env
+
+# build output
+dist/
+
+# logs
+*.log
+
+# os
+.DS_Store
