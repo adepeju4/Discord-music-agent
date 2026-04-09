@@ -1,0 +1,30 @@
+import { z } from 'zod/v4';
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+const envSchema = z.object({
+  DISCORD_TOKEN: z.string().min(1, 'DISCORD_TOKEN is required'),
+  CLIENT_ID: z.string().min(1, 'CLIENT_ID is required'),
+  GEMINI_API_KEY: z.string().min(1, 'GEMINI_API_KEY is required'),
+});
+
+const parsed = envSchema.safeParse(process.env);
+
+if (!parsed.success) {
+  const errors = parsed.error.issues.map(
+    (e: z.ZodIssue) => `  - ${e.path.join('.')}: ${e.message}`,
+  );
+  process.stderr.write(`Missing or invalid environment variables:\n${errors.join('\n')}\n`);
+  process.stderr.write('See .env.example for required variables.\n');
+  process.exit(1);
+}
+
+export const config = {
+  ...parsed.data,
+  BOT_PREFIX: '/',
+  DEFAULT_VOLUME: 50 as number,
+  MAX_QUEUE_SIZE: 200,
+  INACTIVITY_TIMEOUT_MS: 5 * 60 * 1000, // 5 minutes
+  MAX_PLAYLIST_SIZE: 15,
+} as const;
