@@ -1,8 +1,15 @@
 import { spawn, execFile } from 'node:child_process';
 import { PassThrough, Readable } from 'node:stream';
 import { promisify } from 'node:util';
+import { config } from '../config';
 import { childLogger, createCorrelationId } from '../utils/logger';
 import type { TrackInfo } from '../utils/embeds';
+
+function cookieArgs(): string[] {
+  return config.YT_COOKIES_FROM_BROWSER
+    ? ['--cookies-from-browser', config.YT_COOKIES_FROM_BROWSER]
+    : [];
+}
 
 const execFileAsync = promisify(execFile);
 const log = childLogger({ module: 'YouTubeService' });
@@ -10,6 +17,15 @@ const log = childLogger({ module: 'YouTubeService' });
 // Ensure homebrew binaries (yt-dlp, ffmpeg) are in PATH
 if (!process.env.PATH?.includes('/opt/homebrew/bin')) {
   process.env.PATH = `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH}`;
+}
+
+if (config.YT_COOKIES_FROM_BROWSER) {
+  log.info(
+    { browser: config.YT_COOKIES_FROM_BROWSER },
+    'Using browser cookies for YouTube requests',
+  );
+} else {
+  log.info('No browser cookies configured — yt-dlp will use anonymous requests');
 }
 
 export interface SearchResult {
@@ -26,13 +42,18 @@ export class YouTubeService {
     log.debug({ correlationId, query, limit }, 'Searching YouTube via yt-dlp');
 
     try {
-      const { stdout } = await execFileAsync('/opt/homebrew/bin/yt-dlp', [
-        `ytsearch${limit}:${query}`,
-        '--dump-json',
-        '--flat-playlist',
-        '--no-warnings',
-        '--quiet',
-      ], { timeout: 15_000 });
+      const { stdout } = await execFileAsync(
+        '/opt/homebrew/bin/yt-dlp',
+        [
+          ...cookieArgs(),
+          `ytsearch${limit}:${query}`,
+          '--dump-json',
+          '--flat-playlist',
+          '--no-warnings',
+          '--quiet',
+        ],
+        { timeout: 15_000 },
+      );
 
       const results: SearchResult[] = stdout
         .trim()
@@ -64,19 +85,27 @@ export class YouTubeService {
 
     return new Promise((resolve, reject) => {
       const ytdlp = spawn('/opt/homebrew/bin/yt-dlp', [
-        '-f', 'bestaudio',
-        '-o', '-',
+        ...cookieArgs(),
+        '-f',
+        'bestaudio',
+        '-o',
+        '-',
         '--no-warnings',
         '--quiet',
         url,
       ]);
 
       const ffmpeg = spawn('/opt/homebrew/bin/ffmpeg', [
-        '-i', 'pipe:0',
-        '-f', 's16le',
-        '-ar', '48000',
-        '-ac', '2',
-        '-loglevel', 'error',
+        '-i',
+        'pipe:0',
+        '-f',
+        's16le',
+        '-ar',
+        '48000',
+        '-ac',
+        '2',
+        '-loglevel',
+        'error',
         'pipe:1',
       ]);
 
@@ -94,7 +123,10 @@ export class YouTubeService {
       // Log download progress every 2 seconds
       const progressInterval = setInterval(() => {
         if (bytesReceived > 0) {
-          log.info({ correlationId, bytesReceived: `${(bytesReceived / 1024).toFixed(0)}KB` }, 'Audio stream progress');
+          log.info(
+            { correlationId, bytesReceived: `${(bytesReceived / 1024).toFixed(0)}KB` },
+            'Audio stream progress',
+          );
         }
       }, 2000);
 
@@ -122,12 +154,18 @@ export class YouTubeService {
 
       ytdlp.once('error', (error) => {
         log.error({ correlationId, error: error.message }, 'yt-dlp process error');
-        if (!resolved) { resolved = true; reject(error); }
+        if (!resolved) {
+          resolved = true;
+          reject(error);
+        }
       });
 
       ffmpeg.once('error', (error) => {
         log.error({ correlationId, error: error.message }, 'ffmpeg process error');
-        if (!resolved) { resolved = true; reject(error); }
+        if (!resolved) {
+          resolved = true;
+          reject(error);
+        }
       });
 
       ytdlp.once('close', (code) => {

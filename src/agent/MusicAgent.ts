@@ -104,7 +104,10 @@ export class MusicAgent {
 
       const vol = this.volume / 100;
       resource.volume?.setVolume(vol);
-      log.debug({ correlationId, volume: this.volume, hasVolumeTransform: !!resource.volume }, 'Volume applied');
+      log.debug(
+        { correlationId, volume: this.volume, hasVolumeTransform: !!resource.volume },
+        'Volume applied',
+      );
       this.currentResource = resource;
       this.queue.setCurrent(track);
       this.player.play(resource);

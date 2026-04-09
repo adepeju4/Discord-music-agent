@@ -83,6 +83,21 @@ This bot is **self-hosted** — YouTube blocks datacenter IPs, so running it on 
    - Run `/setup` in any text channel to create a `#music` channel and lock commands to it
    - Join a voice channel and try `/play`
 
+### Reliable YouTube access (recommended)
+
+YouTube sometimes returns "Sign in to confirm you're not a bot" when yt-dlp hits it anonymously. To avoid this, point yt-dlp at a logged-in browser session:
+
+1. **Create a dedicated throwaway Google account** — do not use your personal one. Google may flag or lock accounts it suspects of automation.
+2. **Log into YouTube in Chrome** using that throwaway account and stay logged in.
+3. **Set the env var in `.env`:**
+   ```
+   YT_COOKIES_FROM_BROWSER=chrome
+   ```
+   (Other supported browsers: `firefox`, `edge`, `safari`, `brave`, `chromium`.)
+4. **First run on macOS:** the Keychain may prompt once for permission to access Chrome's cookie store. Approve it.
+
+yt-dlp reads cookies directly from the browser's local database every run — no `cookies.txt` file to manage or commit.
+
 ## Commands
 
 | Command | Description |

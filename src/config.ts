@@ -7,13 +7,14 @@ const envSchema = z.object({
   DISCORD_TOKEN: z.string().min(1, 'DISCORD_TOKEN is required'),
   CLIENT_ID: z.string().min(1, 'CLIENT_ID is required'),
   GEMINI_API_KEY: z.string().min(1, 'GEMINI_API_KEY is required'),
+  YT_COOKIES_FROM_BROWSER: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);
 
 if (!parsed.success) {
   const errors = parsed.error.issues.map(
-    (e: z.ZodIssue) => `  - ${e.path.join('.')}: ${e.message}`,
+    (e: z.core.$ZodIssue) => `  - ${e.path.join('.')}: ${e.message}`,
   );
   process.stderr.write(`Missing or invalid environment variables:\n${errors.join('\n')}\n`);
   process.stderr.write('See .env.example for required variables.\n');

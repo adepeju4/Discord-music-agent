@@ -67,7 +67,10 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   let queued = 0;
   for (let i = 0; i < tracks.length; i++) {
     const t = tracks[i];
-    log.info({ correlationId, track: `${t.title} - ${t.artist}`, progress: `${i + 1}/${tracks.length}` }, 'Searching playlist track');
+    log.info(
+      { correlationId, track: `${t.title} - ${t.artist}`, progress: `${i + 1}/${tracks.length}` },
+      'Searching playlist track',
+    );
     const searchResult = await agent.youtubeService.searchOne(`${t.title} ${t.artist}`);
     if (searchResult) {
       const track = agent.youtubeService.toTrackInfo(searchResult, interaction.user.displayName);
@@ -79,7 +82,10 @@ export async function execute(interaction: ChatInputCommandInteraction) {
         await agent.playNext();
       }
     } else {
-      log.info({ correlationId, track: `${t.title} - ${t.artist}` }, 'Playlist track not found — skipping');
+      log.info(
+        { correlationId, track: `${t.title} - ${t.artist}` },
+        'Playlist track not found — skipping',
+      );
     }
   }
 
