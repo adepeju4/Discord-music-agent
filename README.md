@@ -96,18 +96,38 @@ This bot is **self-hosted** — YouTube blocks datacenter IPs, so running it on 
 
 ### Reliable YouTube access (recommended)
 
-YouTube sometimes returns "Sign in to confirm you're not a bot" when yt-dlp hits it anonymously. To avoid this, point yt-dlp at a logged-in browser session:
+YouTube sometimes returns "Sign in to confirm you're not a bot" when yt-dlp hits it anonymously. The fix is to give yt-dlp a logged-in cookie store. There are two ways.
 
-1. **Create a dedicated throwaway Google account** — do not use your personal one. Google may flag or lock accounts it suspects of automation.
-2. **Log into YouTube in Chrome** using that throwaway account and stay logged in.
-3. **Set the env var in `.env`:**
+#### Option A — cached cookies file (recommended)
+
+Extract cookies from your browser **once**, save them to a file, and the bot reads the file for every subsequent request. This avoids the macOS Keychain prompting on every yt-dlp reinstall / Homebrew update.
+
+1. **Create a dedicated throwaway Google account** — do not use your personal one.
+2. **Log into YouTube in Chrome** (or another supported browser) with that account and stay logged in.
+3. **Set both env vars in `.env`:**
+   ```
+   YT_COOKIES_FROM_BROWSER=chrome
+   YT_COOKIES_FILE=/Users/your-username/.yt-cookies.txt
+   ```
+4. **Run the one-time extraction:**
+   ```bash
+   npm run refresh-cookies
+   ```
+   The Keychain will prompt **once** — click "Always Allow." After that, the bot uses the file directly with no further Keychain access.
+5. **When cookies expire** (usually weeks to months), re-run `npm run refresh-cookies`.
+
+#### Option B — direct browser cookies
+
+Simpler but prompts Keychain every time yt-dlp is updated.
+
+1. Same throwaway-account setup as above.
+2. Set only:
    ```
    YT_COOKIES_FROM_BROWSER=chrome
    ```
-   (Other supported browsers: `firefox`, `edge`, `safari`, `brave`, `chromium`.)
-4. **First run on macOS:** the Keychain may prompt once for permission to access Chrome's cookie store. Approve it.
+3. yt-dlp reads from the browser's cookie store on every request. Keychain will prompt whenever Homebrew re-installs yt-dlp and you'll need to approve it again.
 
-yt-dlp reads cookies directly from the browser's local database every run — no `cookies.txt` file to manage or commit.
+`YT_COOKIES_FILE` takes precedence if both are set, so leaving `YT_COOKIES_FROM_BROWSER=chrome` in place is actually useful — `npm run refresh-cookies` reads it to know which browser to extract from.
 
 ### Audio quality checklist
 
@@ -146,6 +166,7 @@ The bot ships bit-exact Opus to Discord, but Discord-side settings still matter:
 |---|---|
 | `npm run dev` | Start the bot |
 | `npm run deploy` | Register slash commands with Discord |
+| `npm run refresh-cookies` | Extract YouTube cookies from your browser to `YT_COOKIES_FILE` (run once, re-run when cookies expire) |
 | `npm run build` | Compile TypeScript |
 | `npm run start` | Run the compiled JS |
 | `npm test` | Run unit tests |

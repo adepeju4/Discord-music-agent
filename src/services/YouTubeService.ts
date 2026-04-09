@@ -6,9 +6,13 @@ import { childLogger, createCorrelationId } from '../utils/logger';
 import type { TrackInfo } from '../utils/embeds';
 
 function cookieArgs(): string[] {
-  return config.YT_COOKIES_FROM_BROWSER
-    ? ['--cookies-from-browser', config.YT_COOKIES_FROM_BROWSER]
-    : [];
+  if (config.YT_COOKIES_FILE) {
+    return ['--cookies', config.YT_COOKIES_FILE];
+  }
+  if (config.YT_COOKIES_FROM_BROWSER) {
+    return ['--cookies-from-browser', config.YT_COOKIES_FROM_BROWSER];
+  }
+  return [];
 }
 
 const execFileAsync = promisify(execFile);
@@ -18,13 +22,15 @@ if (!process.env.PATH?.includes('/opt/homebrew/bin')) {
   process.env.PATH = `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH}`;
 }
 
-if (config.YT_COOKIES_FROM_BROWSER) {
+if (config.YT_COOKIES_FILE) {
+  log.info({ file: config.YT_COOKIES_FILE }, 'Using cookies file for YouTube requests');
+} else if (config.YT_COOKIES_FROM_BROWSER) {
   log.info(
     { browser: config.YT_COOKIES_FROM_BROWSER },
     'Using browser cookies for YouTube requests',
   );
 } else {
-  log.info('No browser cookies configured — yt-dlp will use anonymous requests');
+  log.info('No cookies configured — yt-dlp will use anonymous requests');
 }
 
 export interface SearchResult {

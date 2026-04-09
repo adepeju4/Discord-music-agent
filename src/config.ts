@@ -7,6 +7,7 @@ const envSchema = z.object({
   DISCORD_TOKEN: z.string().min(1, 'DISCORD_TOKEN is required'),
   CLIENT_ID: z.string().min(1, 'CLIENT_ID is required'),
   GEMINI_API_KEY: z.string().min(1, 'GEMINI_API_KEY is required'),
+  YT_COOKIES_FILE: z.string().optional(),
   YT_COOKIES_FROM_BROWSER: z.string().optional(),
 });
 
