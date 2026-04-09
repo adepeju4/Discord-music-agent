@@ -121,4 +121,92 @@ describe('QueueManager', () => {
     queue.addMany([makeTrack('A'), makeTrack('B'), makeTrack('C')]);
     expect(queue.length).toBe(3);
   });
+
+  describe('dropBefore()', () => {
+    beforeEach(() => {
+      queue.add(makeTrack('A'));
+      queue.add(makeTrack('B'));
+      queue.add(makeTrack('C'));
+      queue.add(makeTrack('D'));
+    });
+
+    it('drops tracks before position n', () => {
+      const dropped = queue.dropBefore(3);
+      expect(dropped).toBe(2);
+      expect(queue.allTracks.map((t) => t.title)).toEqual(['C', 'D']);
+    });
+
+    it('drops nothing when jumping to position 1', () => {
+      const dropped = queue.dropBefore(1);
+      expect(dropped).toBe(0);
+      expect(queue.length).toBe(4);
+    });
+
+    it('returns -1 when position is out of range', () => {
+      expect(queue.dropBefore(99)).toBe(-1);
+      expect(queue.dropBefore(0)).toBe(-1);
+      expect(queue.length).toBe(4);
+    });
+  });
+
+  describe('replaceUpcoming()', () => {
+    it('replaces the upcoming queue without touching nowPlaying', () => {
+      queue.add(makeTrack('A'));
+      queue.add(makeTrack('B'));
+      queue.next(); // A becomes current
+      expect(queue.nowPlaying?.title).toBe('A');
+      expect(queue.allTracks.map((t) => t.title)).toEqual(['B']);
+
+      queue.replaceUpcoming([makeTrack('X'), makeTrack('Y'), makeTrack('Z')]);
+
+      expect(queue.nowPlaying?.title).toBe('A');
+      expect(queue.allTracks.map((t) => t.title)).toEqual(['X', 'Y', 'Z']);
+    });
+
+    it('can clear the upcoming queue with an empty array', () => {
+      queue.add(makeTrack('A'));
+      queue.add(makeTrack('B'));
+      queue.replaceUpcoming([]);
+      expect(queue.length).toBe(0);
+    });
+  });
+
+  describe('insert()', () => {
+    beforeEach(() => {
+      queue.add(makeTrack('A'));
+      queue.add(makeTrack('B'));
+      queue.add(makeTrack('C'));
+    });
+
+    it('inserts at position 1 (play next)', () => {
+      const pos = queue.insert(makeTrack('X'), 1);
+      expect(pos).toBe(1);
+      expect(queue.allTracks.map((t) => t.title)).toEqual(['X', 'A', 'B', 'C']);
+    });
+
+    it('inserts at an arbitrary middle position', () => {
+      const pos = queue.insert(makeTrack('X'), 2);
+      expect(pos).toBe(2);
+      expect(queue.allTracks.map((t) => t.title)).toEqual(['A', 'X', 'B', 'C']);
+    });
+
+    it('clamps positions beyond the end to append', () => {
+      const pos = queue.insert(makeTrack('X'), 999);
+      expect(pos).toBe(4);
+      expect(queue.allTracks.map((t) => t.title)).toEqual(['A', 'B', 'C', 'X']);
+    });
+
+    it('clamps non-positive positions to the front', () => {
+      const pos = queue.insert(makeTrack('X'), 0);
+      expect(pos).toBe(1);
+      expect(queue.allTracks.map((t) => t.title)).toEqual(['X', 'A', 'B', 'C']);
+    });
+
+    it('inserts into an empty queue', () => {
+      const empty = new QueueManager();
+      const pos = empty.insert(makeTrack('X'), 5);
+      expect(pos).toBe(1);
+      expect(empty.allTracks.map((t) => t.title)).toEqual(['X']);
+    });
+  });
 });

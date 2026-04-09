@@ -43,9 +43,27 @@ export function queueEmbed(
   const pageTracks = tracks.slice(start, start + pageSize);
 
   if (pageTracks.length > 0) {
-    const list = pageTracks
-      .map((t, i) => `\`${start + i + 1}.\` [${t.title}](${t.url}) — ${formatDuration(t.duration)}`)
-      .join('\n');
+    // Discord field values are capped at 1024 chars. Long titles can blow
+    // through this easily, so truncate titles and drop the hyperlink markdown
+    // if we still overflow.
+    const MAX_FIELD = 1024;
+    const lines: string[] = [];
+    for (let i = 0; i < pageTracks.length; i++) {
+      const t = pageTracks[i];
+      const title = t.title.length > 60 ? t.title.slice(0, 57) + '...' : t.title;
+      lines.push(`\`${start + i + 1}.\` [${title}](${t.url}) — ${formatDuration(t.duration)}`);
+    }
+    let list = lines.join('\n');
+    if (list.length > MAX_FIELD) {
+      // Fall back to plain text (no URLs) if hyperlinked version is too long
+      const plain = pageTracks
+        .map((t, i) => {
+          const title = t.title.length > 60 ? t.title.slice(0, 57) + '...' : t.title;
+          return `\`${start + i + 1}.\` ${title} — ${formatDuration(t.duration)}`;
+        })
+        .join('\n');
+      list = plain.length > MAX_FIELD ? plain.slice(0, MAX_FIELD - 3) + '...' : plain;
+    }
     embed.addFields({ name: 'Up Next', value: list });
   } else if (!current) {
     embed.setDescription('The queue is empty.');
@@ -78,11 +96,13 @@ export function infoEmbed(title: string, description: string): EmbedBuilder {
 export function playlistEmbed(
   theme: string,
   tracks: Array<{ title: string; artist: string }>,
+  options: { footer?: string; note?: string } = {},
 ): EmbedBuilder {
   const list = tracks.map((t, i) => `\`${i + 1}.\` ${t.title} — ${t.artist}`).join('\n');
+  const description = options.note ? `_${options.note}_\n\n${list}` : list;
   return new EmbedBuilder()
     .setTitle(`Playlist: ${theme}`)
-    .setDescription(list)
+    .setDescription(description || '_empty_')
     .setColor(0xfee75c)
-    .setFooter({ text: `${tracks.length} tracks queued` });
+    .setFooter({ text: options.footer ?? `${tracks.length} tracks` });
 }

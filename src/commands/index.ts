@@ -2,6 +2,7 @@ import { Collection, ChatInputCommandInteraction, SharedSlashCommand } from 'dis
 
 import * as play from './play';
 import * as skip from './skip';
+import * as jump from './jump';
 import * as stop from './stop';
 import * as pause from './pause';
 import * as nowplaying from './nowplaying';
@@ -22,6 +23,7 @@ export interface Command {
 const commandModules: Command[] = [
   play,
   skip,
+  jump,
   stop,
   pause,
   nowplaying,

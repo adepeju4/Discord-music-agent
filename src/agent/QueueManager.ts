@@ -28,8 +28,25 @@ export class QueueManager {
     return this.tracks.length;
   }
 
+  insert(track: TrackInfo, position: number): number {
+    const clamped = Math.max(1, Math.min(position, this.tracks.length + 1));
+    this.tracks.splice(clamped - 1, 0, track);
+    return clamped;
+  }
+
   addMany(newTracks: TrackInfo[]): void {
     this.tracks.push(...newTracks);
+  }
+
+  replaceUpcoming(newTracks: TrackInfo[]): void {
+    this.tracks = [...newTracks];
+  }
+
+  dropBefore(n: number): number {
+    if (n < 1 || n > this.tracks.length) return -1;
+    const dropped = n - 1;
+    this.tracks = this.tracks.slice(dropped);
+    return dropped;
   }
 
   next(): TrackInfo | null {

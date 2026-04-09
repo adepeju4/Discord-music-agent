@@ -10,6 +10,7 @@ import { getOrCreateAgent } from '../agent/MusicAgent';
 import { errorEmbed, infoEmbed, addedToQueueEmbed, nowPlayingEmbed } from '../utils/embeds';
 import { formatDuration } from '../utils/formatters';
 import { YouTubeService } from '../services/YouTubeService';
+import { resolveCallerVoiceChannel, NOT_IN_VOICE_MESSAGE } from '../utils/voiceState';
 
 const youtube = new YouTubeService();
 
@@ -22,13 +23,11 @@ export const data = new SlashCommandBuilder()
 
 export async function execute(interaction: ChatInputCommandInteraction) {
   const query = interaction.options.getString('query', true);
-  const member = interaction.member as {
-    voice?: { channel?: import('discord.js').VoiceBasedChannel };
-  };
 
-  if (!member?.voice?.channel) {
+  const voiceChannel = resolveCallerVoiceChannel(interaction);
+  if (!voiceChannel) {
     await interaction.reply({
-      embeds: [errorEmbed('You need to be in a voice channel!')],
+      embeds: [errorEmbed(NOT_IN_VOICE_MESSAGE)],
       ephemeral: true,
     });
     return;
@@ -70,7 +69,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     const agent = getOrCreateAgent(interaction.guildId!);
     agent.textChannel = interaction.channel as import('discord.js').TextChannel;
 
-    await agent.join(member.voice.channel!);
+    await agent.join(voiceChannel);
 
     const track = youtube.toTrackInfo(selected, interaction.user.displayName);
     const position = agent.queue.add(track);
