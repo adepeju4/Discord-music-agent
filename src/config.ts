@@ -24,8 +24,6 @@ if (!parsed.success) {
 export const config = {
   ...parsed.data,
   BOT_PREFIX: '/',
-  DEFAULT_VOLUME: 50 as number,
   MAX_QUEUE_SIZE: 200,
-  INACTIVITY_TIMEOUT_MS: 5 * 60 * 1000, // 5 minutes
   MAX_PLAYLIST_SIZE: 15,
 } as const;

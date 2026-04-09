@@ -1,26 +1,19 @@
 import { SlashCommandBuilder, ChatInputCommandInteraction } from 'discord.js';
-import { getOrCreateAgent } from '../agent/MusicAgent';
 import { infoEmbed } from '../utils/embeds';
 
 export const data = new SlashCommandBuilder()
   .setName('volume')
-  .setDescription('Set the playback volume')
-  .addIntegerOption((opt) =>
-    opt
-      .setName('level')
-      .setDescription('Volume level (0-100)')
-      .setRequired(true)
-      .setMinValue(0)
-      .setMaxValue(100),
-  );
+  .setDescription('How to change volume (disabled — use Discord per-user volume)');
 
 export async function execute(interaction: ChatInputCommandInteraction) {
-  const agent = getOrCreateAgent(interaction.guildId!);
-  const level = interaction.options.getInteger('level', true);
-
-  agent.setVolume(level);
-
   await interaction.reply({
-    embeds: [infoEmbed('Volume', `Volume set to **${level}%**.`)],
+    embeds: [
+      infoEmbed(
+        'Volume',
+        'Server-side volume is disabled so playback is bit-exact high quality. ' +
+          "To adjust the bot's volume, **right-click the bot in the voice channel** and use the **User Volume** slider — it's per-user, so it won't affect anyone else.",
+      ),
+    ],
+    ephemeral: true,
   });
 }
