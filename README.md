@@ -1,4 +1,4 @@
-# LOS Santos FM
+# Discord Music Agent
 
 A Discord music bot powered by **Gemini AI**. Unlike typical music bots that just search and play, this one uses an LLM to understand ambiguous requests, ask clarifying questions, suggest tracks for moods, and curate entire playlists on demand.
 
