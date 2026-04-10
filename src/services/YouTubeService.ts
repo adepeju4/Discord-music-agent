@@ -109,7 +109,7 @@ export class YouTubeService {
     try {
       const { stdout } = await execFileAsync(
         '/opt/homebrew/bin/yt-dlp',
-        [`ytsearch${limit}:${query}`, '--dump-json', '--flat-playlist', '--no-warnings'],
+        [...cookieArgs(), `ytsearch${limit}:${query}`, '--dump-json', '--flat-playlist', '--no-warnings'],
         { timeout: 30_000 },
       );
 
@@ -228,20 +228,14 @@ export class YouTubeService {
     });
   }
 
-  private biasForOfficialAudio(query: string): string {
-    const q = query.toLowerCase();
-    if (/\b(official audio|audio|lyrics|lyric video)\b/.test(q)) return query;
-    return `official audio ${query}`;
-  }
-
   async searchOne(query: string, expectedArtist?: string): Promise<SearchResult | null> {
-    const results = await this.search(this.biasForOfficialAudio(query), 5);
+    const results = await this.search(query, 5);
     if (results.length === 0) return null;
     return pickBestAudio(results, expectedArtist);
   }
 
   async searchCandidates(query: string, limit = 5): Promise<SearchResult[]> {
-    return this.search(this.biasForOfficialAudio(query), limit);
+    return this.search(query, limit);
   }
 
   toTrackInfo(result: SearchResult, requestedBy: string): TrackInfo {

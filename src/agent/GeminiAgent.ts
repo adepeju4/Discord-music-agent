@@ -118,17 +118,20 @@ Candidates:
 ${numbered}
 
 Rank preferences from HIGHEST to LOWEST:
-1. "Official Audio" uploads (pure studio master, no video at all)
-2. "Lyric Video" or "Lyrics" — these typically contain the untouched studio audio with text overlaid, so the audio is identical to the studio cut
-3. "Official Music Video" — still the artist's version but may have intros/outros, edits, or sound-effect overlays that hurt pure-audio listening
-4. Plain artist uploads with no descriptor
-5. Anything else
+1. "Official Audio" uploads — pure studio master, no video
+2. Uploads from "<Artist> - Topic" channels — auto-generated YouTube Music uploads, always clean studio audio
+3. "Lyric Video" or "Lyrics" from the artist or label channel — untouched studio audio with text overlay
+4. Plain title from the artist's own channel with NO video descriptor (e.g. just "Billie Jean" by "Michael Jackson") — usually the album audio, cleaner than a music video
+5. "Official Music Video" — may have intros, outros, dialogue, sound effects, or edits that differ from the studio recording
+6. Anything else
+
+KEY RULE: a plain upload from the artist channel (no "video" in the title) is BETTER than an Official Music Video. Music videos often have production overlays that hurt audio-only listening.
 
 Also strongly prefer:
-- Channel name matches the artist (or ends in "- Topic" / "VEVO") — this marks an official upload
+- Channel name matches the artist (or ends in "- Topic" / "VEVO")
 - Duration reasonable for a single (usually 2:00–6:00)
 
-Strongly AVOID (pick these only if nothing else is available):
+Strongly AVOID:
 - Live performances, concerts, tour footage
 - Covers, remixes, mashups, edits, "sped up", "slowed", nightcore, 8D
 - Karaoke, instrumental, acapella versions
@@ -191,17 +194,20 @@ Return ONLY a JSON object: {"pick": <0-based index>, "reason": "<short reason>"}
 ${sections}
 
 For EACH track, rank preferences from HIGHEST to LOWEST:
-1. "Official Audio" uploads (pure studio master, no video at all)
-2. "Lyric Video" or "Lyrics" — these typically contain the untouched studio audio with text overlaid, so the audio is identical to the studio cut
-3. "Official Music Video" — the artist's version but may have intros/outros, edits, or sound-effect overlays that hurt pure-audio listening
-4. Plain artist uploads with no descriptor
-5. Anything else
+1. "Official Audio" uploads — pure studio master, no video
+2. Uploads from "<Artist> - Topic" channels — auto-generated YouTube Music uploads, always clean studio audio
+3. "Lyric Video" or "Lyrics" from the artist or label channel — untouched studio audio with text overlay
+4. Plain title from the artist's own channel with NO video descriptor (e.g. just "Billie Jean" by "Michael Jackson") — usually the album audio, cleaner than a music video
+5. "Official Music Video" — may have intros, outros, dialogue, sound effects, or edits that differ from the studio recording
+6. Anything else
+
+KEY RULE: a plain upload from the artist channel (no "video" in the title) is BETTER than an Official Music Video. Music videos often have production overlays that hurt audio-only listening.
 
 Also strongly prefer:
-- Channel name matches the artist (or ends in "- Topic" / "VEVO") — marks an official upload
+- Channel name matches the artist (or ends in "- Topic" / "VEVO")
 - Duration reasonable for a single (usually 2:00–6:00)
 
-Strongly AVOID (pick these only if nothing else is available):
+Strongly AVOID:
 - Live performances, concerts, tour footage
 - Covers, remixes, mashups, edits, "sped up", "slowed", nightcore, 8D
 - Karaoke, instrumental, acapella versions
@@ -216,16 +222,28 @@ Return ONLY a JSON object of this exact shape (no markdown):
     try {
       const result = await this.model.generateContent({
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.1, maxOutputTokens: 2048 },
+        generationConfig: { temperature: 0.1, maxOutputTokens: 4096 },
       });
 
       const text = result.response.text().trim();
       const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '');
-      const parsed = JSON.parse(cleaned) as {
-        picks: Array<{ track: number; pick: number }>;
-      };
 
-      // Build an array indexed by track, with null for anything missing/invalid
+      let parsed: { picks: Array<{ track: number; pick: number }> };
+      try {
+        parsed = JSON.parse(cleaned);
+      } catch (parseError) {
+        log.warn(
+          {
+            correlationId,
+            error: parseError instanceof Error ? parseError.message : String(parseError),
+            rawLength: cleaned.length,
+            rawTail: cleaned.slice(-100),
+          },
+          'LLM batch-pick returned malformed JSON',
+        );
+        return new Array(items.length).fill(null);
+      }
+
       const out: Array<number | null> = new Array(items.length).fill(null);
       for (const p of parsed.picks ?? []) {
         if (typeof p.track !== 'number' || p.track < 0 || p.track >= items.length) continue;
