@@ -1,9 +1,10 @@
 import { spawn } from 'node:child_process';
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import dotenv from 'dotenv';
 import { resolveBinary } from '../src/utils/binaries';
+import { filterToYouTube, summarizeCookies } from '../src/utils/cookies';
 
 dotenv.config();
 
@@ -74,13 +75,39 @@ async function main() {
     fail(`yt-dlp exited cleanly but no cookies file was written at ${outputPath}`);
   }
 
-  const stats = statSync(outputPath);
+  let stats = statSync(outputPath);
   if (stats.size === 0) {
     fail(`Cookies file is empty at ${outputPath}`);
   }
 
+  // yt-dlp exports the entire browser jar. Everything outside YouTube and
+  // Google is someone else's live session and has no business in a file that
+  // gets copied to a server.
+  const { kept, dropped } = filterToYouTube(readFileSync(outputPath, 'utf8'));
+  if (dropped > 0) {
+    writeFileSync(outputPath, kept, { mode: 0o600 });
+    info(`Removed ${dropped} cookies for unrelated sites (kept YouTube and Google only)`);
+  }
+
+  // A jar with only visitor cookies looks fine but proves nothing to YouTube,
+  // which is the difference between playback working and every request being
+  // challenged — especially from a server.
+  const summary = summarizeCookies(readFileSync(outputPath, 'utf8'));
+  if (!summary.signedIn) {
+    process.stderr.write(
+      `\n  Exported ${summary.names.length} cookies, but none prove a signed-in session:\n` +
+        `    ${summary.names.join(', ') || '(none)'}\n\n` +
+        `  Sign in to YouTube in ${browser} (use a throwaway Google account), keep\n` +
+        `  that profile open, and run this again. If ${browser} has several profiles,\n` +
+        `  point at the right one, e.g. YT_COOKIES_FROM_BROWSER="${browser}:Profile 1".\n`,
+    );
+    fail('No login cookies found — this file would not get past YouTube on a server.');
+  }
+
+  stats = statSync(outputPath);
   process.stdout.write('\n');
-  ok(`Cookies written to ${outputPath} (${stats.size} bytes)`);
+  ok(`Cookies written to ${outputPath} (${stats.size} bytes, mode 600)`);
+  ok(`Signed-in session confirmed (${summary.loginCookies.join(', ')})`);
   process.stdout.write('\n');
   info('Add this to your .env if not already set:');
   info(`  YT_COOKIES_FILE=${outputPath}`);
