@@ -488,6 +488,47 @@ async function handleCurated(
   log.info({ correlationId, playlistId: chosen.id, queued }, 'Curated playlist queued');
 }
 
+/** Several named tracks, or a themed set Gemini built itself. */
+async function handleTrackList(
+  interaction: ChatInputCommandInteraction,
+  agent: MusicAgent,
+  request: { message: string; tracks: Array<{ title: string; artist: string }> },
+  position: number | undefined,
+  correlationId: string,
+): Promise<void> {
+  const intents: TrackIntent[] = (request.tracks ?? [])
+    .filter((t) => t?.title)
+    .slice(0, config.MAX_IMPORT_SIZE);
+
+  if (intents.length === 0) {
+    await interaction.editReply({
+      embeds: [
+        errorEmbed("I couldn't work out which tracks you meant. Try naming them one by one."),
+      ],
+    });
+    return;
+  }
+
+  if (intents.length === 1) {
+    await resolveSingleIntent(interaction, agent, intents[0], position);
+    return;
+  }
+
+  const { resolved, failed } = await importTrackIntents(
+    interaction,
+    agent,
+    request.message || `${intents.length} tracks`,
+    intents,
+    position,
+    {
+      total: intents.length,
+      sourceLabel: 'your request',
+      footer: `Requested by ${interaction.user.displayName}`,
+    },
+  );
+  log.info({ correlationId, resolved, failed }, 'Track list queued');
+}
+
 async function handleSpotify(
   interaction: ChatInputCommandInteraction,
   agent: MusicAgent,
@@ -764,6 +805,11 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
   if (geminiResult.action === 'curated') {
     await handleCurated(interaction, agent, geminiResult, position, correlationId);
+    return;
+  }
+
+  if (geminiResult.action === 'playlist') {
+    await handleTrackList(interaction, agent, geminiResult, position, correlationId);
     return;
   }
 
