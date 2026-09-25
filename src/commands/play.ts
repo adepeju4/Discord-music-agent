@@ -9,7 +9,13 @@ import {
   type ButtonInteraction,
 } from 'discord.js';
 import { getOrCreateAgent, type MusicAgent } from '../agent/MusicAgent';
-import { normalizeText, resolveTrackIntents, type TrackIntent } from '../agent/resolveTracks';
+import {
+  confidentCatalogMatch,
+  normalizeText,
+  plausibleMatch,
+  resolveTrackIntents,
+  type TrackIntent,
+} from '../agent/resolveTracks';
 import {
   addedToQueueEmbed,
   collectionEmbed,
@@ -55,8 +61,26 @@ async function searchAndPick(
   query: string,
   intent: { title?: string; artist?: string; rawQuery?: string },
 ): Promise<SearchResult | null> {
-  const candidates = await agent.youtubeService.searchCandidates(query);
+  // Ask Spotify what the track actually is first. Its canonical title, artists
+  // and duration turn the catalog lookup into an exact match instead of a
+  // judgement call, which is how imports already behave.
+  const canonical = await spotify.searchTrack(intent.title ?? query, intent.artist);
+  const wanted: TrackIntent = { title: intent.title ?? query, artist: intent.artist ?? '' };
+  const target = canonical && plausibleMatch(wanted, canonical) ? canonical : null;
+
+  const candidates = await agent.youtubeService.searchCandidates(
+    target ? `${target.title} ${target.artist}` : query,
+  );
   if (candidates.length === 0) return null;
+
+  if (target) {
+    const exact = confidentCatalogMatch(candidates, target);
+    if (exact) {
+      log.debug({ query, picked: exact.title }, 'Strict catalog match');
+      return exact;
+    }
+  }
+
   if (candidates.length === 1) return candidates[0];
 
   const llmPick = await agent.geminiAgent.pickBestSingle(
@@ -209,7 +233,10 @@ async function importTrackIntents(
     intents,
     interaction.user.displayName,
     (track) => queuer.add(track),
-    { concurrency: () => (agent.isActive ? PLAYBACK_CONCURRENCY : IDLE_CONCURRENCY) },
+    {
+      lookup: spotify,
+      concurrency: () => (agent.isActive ? PLAYBACK_CONCURRENCY : IDLE_CONCURRENCY),
+    },
   );
 
   const summary =
@@ -244,6 +271,7 @@ async function resolveSingleIntent(
     (track) => {
       picked = track;
     },
+    { lookup: spotify },
   );
   if (!picked) {
     await interaction.editReply({

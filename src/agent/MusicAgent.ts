@@ -14,13 +14,17 @@ import type { Readable } from 'node:stream';
 import type { VoiceBasedChannel, TextChannel } from 'discord.js';
 import { QueueManager } from './QueueManager';
 import { GeminiAgent } from './GeminiAgent';
-import { pickBestAudio, youtubeService, type YouTubeService } from '../services/YouTubeService';
+import { youtubeService, type YouTubeService } from '../services/YouTubeService';
+import { resolveTrackIntents } from './resolveTracks';
+import { SpotifyService } from '../services/SpotifyService';
 import { childLogger, createCorrelationId } from '../utils/logger';
 import { errorEmbed, type TrackInfo } from '../utils/embeds';
 import { errorText, explainError, explainErrorOr } from '../utils/errors';
 import { NowPlayingPanel } from './NowPlayingPanel';
 
 const log = childLogger({ module: 'MusicAgent' });
+
+const spotifyLookup = new SpotifyService();
 
 export const DEFAULT_VOLUME = 100;
 /** prism-media caps the Opus encoder here; our source is ~130 kbps. */
@@ -297,55 +301,18 @@ export class MusicAgent {
       }
     }
 
-    const CONCURRENCY = 5;
-    const candidatesPerLookup: Array<Awaited<ReturnType<typeof this.youtube.searchCandidates>>> =
-      new Array(newLookups.length).fill(null).map(() => []);
-
-    for (let batchStart = 0; batchStart < newLookups.length; batchStart += CONCURRENCY) {
-      const batch = newLookups.slice(batchStart, batchStart + CONCURRENCY);
-      const results = await Promise.all(
-        batch.map((l) => this.youtube.searchCandidates(`${l.title} ${l.artist}`, 5)),
-      );
-      for (let j = 0; j < results.length; j++) {
-        candidatesPerLookup[batchStart + j] = results[j];
-      }
-    }
-
-    const llmItems = newLookups.map((l, i) => ({
-      intent: { title: l.title, artist: l.artist },
-      candidates: candidatesPerLookup[i].map((c) => ({
-        title: c.title,
-        channel: c.artist,
-        duration: c.duration,
-        album: c.album,
-        source: c.source,
-      })),
-    }));
-    const llmPicks = await this.gemini.pickBestBatch(llmItems);
-
-    let failed = 0;
-    for (let j = 0; j < newLookups.length; j++) {
-      const lookup = newLookups[j];
-      const cands = candidatesPerLookup[j];
-      if (cands.length === 0) {
-        failed++;
-        log.info(
-          { correlationId, track: `${lookup.title} - ${lookup.artist}` },
-          'Refinement new-track not found',
-        );
-        continue;
-      }
-      const llmIdx = llmPicks[j];
-      const sr =
-        llmIdx !== null && llmIdx >= 0 && llmIdx < cands.length
-          ? cands[llmIdx]
-          : pickBestAudio(cands, lookup.artist, `${lookup.title} ${lookup.artist}`);
-      if (!sr) {
-        failed++;
-        continue;
-      }
-      resolved[lookup.index] = this.youtube.toTrackInfo(sr, requestedBy);
-    }
+    const results = new Map<number, TrackInfo>();
+    const { failed } = await resolveTrackIntents(
+      this.youtube,
+      this.gemini,
+      newLookups,
+      requestedBy,
+      (track, i) => {
+        results.set(newLookups[i].index, track);
+      },
+      { lookup: spotifyLookup, concurrency: () => (this.isActive ? 2 : 5) },
+    );
+    for (const [index, track] of results) resolved[index] = track;
 
     const finalTracks = resolved.filter((t): t is TrackInfo => t !== null);
     const kept = Array.from(usedExisting).length;

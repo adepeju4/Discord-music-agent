@@ -144,6 +144,43 @@ export class SpotifyService {
    * longer embeds its tracks. The public embed page still lists them, so the
    * Web API is tried first and the embed covers whatever it will not serve.
    */
+  /**
+   * Resolves a loose "title by artist" into Spotify's canonical metadata.
+   *
+   * A model suggesting tracks gives approximate titles and often omits the
+   * featured artists or the exact edit. Spotify's catalogue supplies the real
+   * title, the full artist list and the duration, and the duration is what lets
+   * the YouTube match be strict rather than hopeful.
+   */
+  async searchTrack(title: string, artist?: string): Promise<SpotifyTrack | null> {
+    if (!this.isConfigured) return null;
+
+    const query = artist ? `track:${title} artist:${artist}` : title;
+    try {
+      const data = await this.get<{ tracks?: { items?: RawTrack[] } }>(
+        `https://api.spotify.com/v1/search?q=${encodeURIComponent(query)}&type=track&limit=1`,
+      );
+      const hit = data.tracks?.items?.[0];
+      if (hit) return toTrack(hit);
+
+      // The field-qualified query is strict; fall back to a plain one.
+      if (artist) {
+        const loose = await this.get<{ tracks?: { items?: RawTrack[] } }>(
+          `https://api.spotify.com/v1/search?q=${encodeURIComponent(`${title} ${artist}`)}&type=track&limit=1`,
+        );
+        const second = loose.tracks?.items?.[0];
+        if (second) return toTrack(second);
+      }
+      return null;
+    } catch (error) {
+      log.debug(
+        { title, artist, error: error instanceof Error ? error.message : String(error) },
+        'Spotify track lookup failed',
+      );
+      return null;
+    }
+  }
+
   async resolve(ref: SpotifyRef, limit = config.MAX_IMPORT_SIZE): Promise<SpotifyCollection> {
     const correlationId = createCorrelationId();
     log.info({ correlationId, type: ref.type, id: ref.id }, 'Resolving Spotify reference');

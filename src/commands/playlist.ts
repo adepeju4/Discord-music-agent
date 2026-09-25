@@ -17,9 +17,12 @@ import { config } from '../config';
 import { childLogger, createCorrelationId } from '../utils/logger';
 import { setDraft, getDraft, deleteDraft, type PlaylistDraft } from '../agent/playlistDrafts';
 import { resolveCallerVoiceChannel, NOT_IN_VOICE_MESSAGE } from '../utils/voiceState';
-import { pickBestAudio } from '../services/YouTubeService';
+import { resolveTrackIntents } from '../agent/resolveTracks';
+import { SpotifyService } from '../services/SpotifyService';
 
 const log = childLogger({ module: 'cmd:playlist' });
+
+const spotify = new SpotifyService();
 
 const CUSTOM_ID_PREFIX = 'pl:';
 
@@ -358,89 +361,39 @@ async function handleQueueIt(interaction: ButtonInteraction, draft: PlaylistDraf
     components: [],
   });
 
-  const CONCURRENCY = 5;
-  const candidateLists: Array<Awaited<ReturnType<typeof agent.youtubeService.searchCandidates>>> =
-    new Array(draft.tracks.length).fill(null).map(() => []);
+  const queuer = {
+    queued: 0,
+    kicked: false,
+  };
+  const { resolved, failed } = await resolveTrackIntents(
+    agent.youtubeService,
+    agent.geminiAgent,
+    draft.tracks,
+    interaction.user.displayName,
+    async (track) => {
+      agent.queue.add(track);
+      queuer.queued++;
+      if (!queuer.kicked && !agent.isActive) {
+        queuer.kicked = true;
+        await agent.playNext();
+      } else if (queuer.queued === 1) {
+        agent.prefetchNext();
+      }
+    },
+    {
+      lookup: spotify,
+      concurrency: () => (agent.isActive ? 2 : 5),
+    },
+  );
 
-  for (let batchStart = 0; batchStart < draft.tracks.length; batchStart += CONCURRENCY) {
-    const batch = draft.tracks.slice(batchStart, batchStart + CONCURRENCY);
-    log.info(
-      {
-        correlationId,
-        batch: `${batchStart + 1}-${Math.min(batchStart + CONCURRENCY, draft.tracks.length)}/${draft.tracks.length}`,
-      },
-      'Searching draft batch candidates',
-    );
-    const results = await Promise.all(
-      batch.map((t) => agent.youtubeService.searchCandidates(`${t.title} ${t.artist}`, 5)),
-    );
-    for (let i = 0; i < results.length; i++) {
-      candidateLists[batchStart + i] = results[i];
-    }
-  }
-
-  const withCandidates = draft.tracks
-    .map((t, i) => ({ i, intent: t, candidates: candidateLists[i] }))
-    .filter((x) => x.candidates.length > 0);
-
-  const llmItems = withCandidates.map((x) => ({
-    intent: { title: x.intent.title, artist: x.intent.artist },
-    candidates: x.candidates.map((c) => ({
-      title: c.title,
-      channel: c.artist,
-      duration: c.duration,
-      album: c.album,
-      source: c.source,
-    })),
-  }));
-
-  log.info({ correlationId, count: llmItems.length }, 'Running batched LLM pick');
-  const llmPicks = await agent.geminiAgent.pickBestBatch(llmItems);
-
-  let queued = 0;
-  let playbackKicked = false;
-  for (let k = 0; k < withCandidates.length; k++) {
-    const { i, intent, candidates } = withCandidates[k];
-    const llmIdx = llmPicks[k];
-    const sr =
-      llmIdx !== null && llmIdx >= 0 && llmIdx < candidates.length
-        ? candidates[llmIdx]
-        : pickBestAudio(candidates, intent.artist, `${intent.title} ${intent.artist}`);
-
-    if (!sr) {
-      log.info(
-        { correlationId, track: `${intent.title} - ${intent.artist}` },
-        'Draft track not found — skipping',
-      );
-      continue;
-    }
-    const track = agent.youtubeService.toTrackInfo(sr, interaction.user.displayName);
-    agent.queue.add(track);
-    queued++;
-    log.debug(
-      {
-        correlationId,
-        playlistIndex: i,
-        pickedTitle: sr.title,
-        via: llmIdx !== null ? 'llm' : 'regex',
-      },
-      'Track resolved',
-    );
-
-    if (!playbackKicked && !agent.isPlaying && !agent.isPaused) {
-      playbackKicked = true;
-      await agent.playNext();
-    }
-  }
-
-  log.info({ correlationId, queued, total: draft.tracks.length }, 'Draft queued');
+  log.info({ correlationId, queued: resolved, failed, total: draft.tracks.length }, 'Draft queued');
 
   deleteDraft(guildId, draft.userId);
 
   await interaction.editReply({
     embeds: [
       playlistEmbed(draft.theme, draft.tracks, {
-        note: `Queued ${queued}/${draft.tracks.length} tracks.`,
+        note: `Queued ${resolved}/${draft.tracks.length} tracks.`,
         footer: `Requested by ${interaction.user.displayName}`,
       }),
     ],

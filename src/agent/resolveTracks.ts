@@ -14,6 +14,31 @@ export interface TrackIntent {
 const DURATION_TOLERANCE_S = 4;
 const CONCURRENCY = 5;
 
+export interface TrackLookup {
+  searchTrack(title: string, artist?: string): Promise<TrackIntent | null>;
+}
+
+/**
+ * Spotify answers every query with something, so a suggestion it cannot find
+ * comes back as an unrelated song. Only accept a lookup that still resembles
+ * what was asked for.
+ */
+export function plausibleMatch(requested: TrackIntent, found: TrackIntent): boolean {
+  const tokens = (text: string) => new Set(normalizeText(text).split(' ').filter(Boolean));
+  const overlap = (a: Set<string>, b: Set<string>) => {
+    if (a.size === 0) return 0;
+    let hits = 0;
+    for (const t of a) if (b.has(t)) hits++;
+    return hits / a.size;
+  };
+
+  // The found title may add "(feat. X)", so measure how much of the request survives.
+  if (overlap(tokens(requested.title), tokens(found.title)) < 0.6) return false;
+  if (!requested.artist) return true;
+  const wantArtist = tokens(requested.artist.split(/,|&| feat\.? | ft\.? /i)[0] ?? '');
+  return overlap(wantArtist, tokens(found.artist)) >= 0.5;
+}
+
 export interface ResolveOptions {
   /**
    * Evaluated before each batch. Every lookup spawns a yt-dlp process, so while
@@ -21,6 +46,12 @@ export interface ResolveOptions {
    * starves the audio pipe and playback stutters.
    */
   concurrency?: () => number;
+  /**
+   * Canonical metadata source for loosely-specified tracks. A model's
+   * suggestions carry no duration, and duration is what makes the catalog match
+   * strict instead of a guess.
+   */
+  lookup?: TrackLookup;
 }
 
 export function normalizeText(text: string): string {
@@ -71,7 +102,24 @@ export async function resolveTrackIntents(
   while (batchStart < intents.length) {
     const requested = options?.concurrency?.() ?? CONCURRENCY;
     const size = Math.max(1, Math.min(Math.floor(requested), CONCURRENCY));
-    const batch = intents.slice(batchStart, batchStart + size);
+    const rawBatch = intents.slice(batchStart, batchStart + size);
+
+    // Replace loose suggestions with catalogue-accurate title, artists and
+    // duration before searching, so the strict matcher has something to be
+    // strict about.
+    const batch = await Promise.all(
+      rawBatch.map(async (intent) => {
+        if (!options?.lookup || intent.durationMs !== undefined) return intent;
+        try {
+          const found = await options.lookup.searchTrack(intent.title, intent.artist);
+          if (found && plausibleMatch(intent, found)) return found;
+        } catch {
+          // Enrichment is an optimisation; fall back to the original intent.
+        }
+        return intent;
+      }),
+    );
+
     const candidateLists = await Promise.all(
       batch.map((t) => youtube.searchCandidates(`${t.title} ${t.artist}`, 5)),
     );
