@@ -54,24 +54,35 @@ describe('cookie jar protection', () => {
     const master = join(dir, 'master.txt');
     writeFileSync(master, JAR);
 
+    // Record the scratch path yt-dlp was handed, so cleanup can be checked
+    // exactly rather than by scanning a shared temp directory.
+    const pathLog = join(dir, 'paths.log');
     const fakeYtDlp = join(dir, 'fake-yt-dlp');
-    writeFileSync(fakeYtDlp, '#!/bin/sh\necho "{}"\n', { mode: 0o755 });
+    writeFileSync(
+      fakeYtDlp,
+      `#!/bin/sh\nprev=""\nfor a in "$@"; do\n  if [ "$prev" = "--cookies" ]; then echo "$a" >> ${pathLog}; fi\n  prev="$a"\ndone\necho "{}"\n`,
+      { mode: 0o755 },
+    );
 
     process.env.YT_COOKIES_FILE = master;
     process.env.YTDLP_PATH = fakeYtDlp;
+    delete process.env.YT_COOKIES_FROM_BROWSER;
+    delete process.env.YTDLP_PROXY;
+    vi.resetModules();
 
     const { YouTubeService } = await import('../src/services/YouTubeService');
     const yt = new YouTubeService();
     await yt.search('one', 1);
     await yt.search('two', 1);
 
-    const leftovers = execFileSync('sh', [
-      '-c',
-      `ls ${tmpdir()}/yt-cookies-*.txt 2>/dev/null | wc -l`,
-    ])
-      .toString()
-      .trim();
-    expect(Number(leftovers)).toBe(0);
+    const used = readFileSync(pathLog, 'utf8').trim().split('\n');
+    expect(used).toHaveLength(2);
+    // Each run gets its own copy, and none of them outlive the call.
+    expect(new Set(used).size).toBe(2);
+    for (const p of used) {
+      expect(p).not.toBe(master);
+      expect(existsSync(p)).toBe(false);
+    }
     expect(existsSync(master)).toBe(true);
   });
 });
