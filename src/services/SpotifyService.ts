@@ -28,6 +28,17 @@ export interface SpotifyCollection {
 const EMBED_USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
 const EMBED_TIMEOUT_MS = 15_000;
+const API_TIMEOUT_MS = 10_000;
+
+async function fetchWithTimeout(url: string, init: RequestInit, ms: number): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 const URL_RE =
   /^(?:https?:\/\/)?open\.spotify\.com\/(?:intl-[a-z]{2}(?:-[a-z]{2})?\/)?(?:embed\/)?(track|album|playlist)\/([A-Za-z0-9]{22})(?:[/?#].*)?$/i;
@@ -97,14 +108,18 @@ export class SpotifyService {
     const credentials = Buffer.from(
       `${config.SPOTIFY_CLIENT_ID}:${config.SPOTIFY_CLIENT_SECRET}`,
     ).toString('base64');
-    const res = await fetch('https://accounts.spotify.com/api/token', {
-      method: 'POST',
-      headers: {
-        Authorization: `Basic ${credentials}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
+    const res = await fetchWithTimeout(
+      'https://accounts.spotify.com/api/token',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Basic ${credentials}`,
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: 'grant_type=client_credentials',
       },
-      body: 'grant_type=client_credentials',
-    });
+      API_TIMEOUT_MS,
+    );
     if (!res.ok) {
       throw new Error(`Spotify auth failed: ${res.status} ${await res.text()}`);
     }
@@ -115,7 +130,11 @@ export class SpotifyService {
 
   private async get<T>(url: string): Promise<T> {
     const token = await this.getToken();
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    const res = await fetchWithTimeout(
+      url,
+      { headers: { Authorization: `Bearer ${token}` } },
+      API_TIMEOUT_MS,
+    );
     if (!res.ok) {
       throw new Error(`Spotify request failed: ${res.status} ${await res.text()}`);
     }

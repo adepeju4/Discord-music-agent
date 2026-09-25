@@ -96,8 +96,29 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
   log.info({ correlationId, theme, guildId }, 'Starting playlist draft');
 
+  // Curation takes ten seconds or so; an empty "thinking" state for that long
+  // reads as a hang.
+  await interaction.editReply({
+    embeds: [infoEmbed('Building your playlist', `Finding real playlists for **${theme}**…`)],
+  });
+
   const pools = await agent.youtubeService.music.collectThemePools(theme);
+  log.info(
+    { correlationId, theme, recent: pools.recent.length, classic: pools.classic.length },
+    'Theme pools collected',
+  );
+
+  await interaction.editReply({
+    embeds: [
+      infoEmbed(
+        'Building your playlist',
+        `Picking ${recentShare}% recent tracks from ${pools.recent.length + pools.classic.length} real ones…`,
+      ),
+    ],
+  });
+
   const result = await agent.geminiAgent.curatePlaylst(theme, pools, recentShare);
+  log.info({ correlationId, theme, tracks: result.tracks.length }, 'Playlist draft ready');
 
   if (!result.tracks || result.tracks.length === 0) {
     await interaction.editReply({ embeds: [errorEmbed(result.message)] });
@@ -354,8 +375,8 @@ async function handleQueueIt(interaction: ButtonInteraction, draft: PlaylistDraf
   await interaction.update({
     embeds: [
       playlistEmbed(draft.theme, draft.tracks, {
-        note: 'Queueing tracks...',
-        footer: `${draft.tracks.length} tracks • searching YouTube`,
+        note: 'Queueing tracks — playback starts as soon as the first one resolves.',
+        footer: `${draft.tracks.length} tracks • matching against the music catalog`,
       }),
     ],
     components: [],
