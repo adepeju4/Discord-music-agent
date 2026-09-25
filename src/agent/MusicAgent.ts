@@ -137,7 +137,21 @@ export class MusicAgent {
       }
     });
 
-    this.connection.subscribe(this.player);
+    this.connection.on('stateChange', (oldState, newState) => {
+      if (oldState.status === newState.status) return;
+      log.info(
+        { guildId: this.guildId, from: oldState.status, to: newState.status },
+        'Voice connection state changed',
+      );
+    });
+
+    const subscription = this.connection.subscribe(this.player);
+    if (!subscription) {
+      log.error(
+        { correlationId, guildId: this.guildId },
+        'Voice connection refused the player subscription — audio would go nowhere',
+      );
+    }
 
     // joinVoiceChannel() resolves optimistically, so without this the bot
     // reports "Now Playing" while never actually reaching the channel.
@@ -459,6 +473,21 @@ export class MusicAgent {
   }
 
   private setupPlayerEvents(): void {
+    // Without this, a track that never reaches Playing is indistinguishable
+    // from one that plays silently — the logs look identical either way.
+    this.player.on('stateChange', (oldState, newState) => {
+      if (oldState.status === newState.status) return;
+      log.info(
+        {
+          guildId: this.guildId,
+          from: oldState.status,
+          to: newState.status,
+          track: this.queue.nowPlaying?.title,
+        },
+        'Player state changed',
+      );
+    });
+
     this.player.on(AudioPlayerStatus.Idle, () => {
       this.playNext();
     });
