@@ -34,6 +34,25 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
     return;
   }
 
+  // After a dropped connection the queue survives but there is nothing to send
+  // audio down, so these buttons would appear to do nothing at all.
+  if (!agent.connection) {
+    try {
+      await agent.join(callerChannel);
+      log.info({ guildId, userId: interaction.user.id }, 'Reconnected from panel control');
+    } catch {
+      await interaction.reply({
+        embeds: [
+          errorEmbed(
+            "I'm not connected to voice any more. Run `/play` to bring me back — your queue is still here.",
+          ),
+        ],
+        ephemeral: true,
+      });
+      return;
+    }
+  }
+
   const action = interaction.customId.slice(PANEL_PREFIX.length);
   let volumeResult: { volume: number; appliedNow: boolean } | null = null;
   log.debug({ guildId, action, userId: interaction.user.id }, 'Panel control used');

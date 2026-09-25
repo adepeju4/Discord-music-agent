@@ -54,6 +54,7 @@ export class MusicAgent {
   private currentResource: AudioResource | null = null;
   private volumePercent = DEFAULT_VOLUME;
   private preload: PreloadedStream | null = null;
+  private lastChannel: VoiceBasedChannel | null = null;
   private readonly guildId: string;
   private readonly youtube = youtubeService;
   private readonly gemini = new GeminiAgent();
@@ -117,6 +118,7 @@ export class MusicAgent {
       'Joining voice channel',
     );
 
+    this.lastChannel = channel;
     this.connection = joinVoiceChannel({
       channelId: channel.id,
       guildId: this.guildId,
@@ -124,21 +126,33 @@ export class MusicAgent {
     });
 
     this.connection.on(VoiceConnectionStatus.Disconnected, async () => {
+      log.info({ guildId: this.guildId }, 'Voice connection disconnected');
       try {
+        // Discord moving the voice server looks like a disconnect and recovers
+        // on its own within a few seconds.
         await Promise.race([
           entersState(this.connection!, VoiceConnectionStatus.Signalling, 5_000),
           entersState(this.connection!, VoiceConnectionStatus.Connecting, 5_000),
         ]);
-      } catch (error) {
-        log.debug(
-          {
-            guildId: this.guildId,
-            error: error instanceof Error ? error.message : String(error),
-          },
-          'Voice reconnect failed, destroying agent',
-        );
-        this.destroy();
+        return;
+      } catch {
+        // Not self-healing — rejoin explicitly below.
       }
+
+      if (await this.rejoin()) return;
+
+      // Give up on the connection, but never on the queue: a dropped call is
+      // not a reason to lose the tracks people queued.
+      log.warn({ guildId: this.guildId, queued: this.queue.length }, 'Voice connection lost');
+      this.connection?.destroy();
+      this.connection = null;
+      this.textChannel?.send({
+        embeds: [
+          errorEmbed(
+            `I lost the voice connection. Your queue is safe — **${this.queue.length} track${this.queue.length === 1 ? '' : 's'}** still waiting. Run \`/play\` to pick it back up.`,
+          ),
+        ],
+      });
     });
 
     this.connection.on('stateChange', (oldState, newState) => {
@@ -382,6 +396,33 @@ export class MusicAgent {
   private discardPreload(): void {
     this.preload?.stream.destroy();
     this.preload = null;
+  }
+
+  /** Rebuilds a dropped connection to the same channel, keeping the queue. */
+  private async rejoin(): Promise<boolean> {
+    const channel = this.lastChannel;
+    if (!channel) return false;
+
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        this.connection?.destroy();
+        this.connection = null;
+        await this.join(channel);
+        log.info({ guildId: this.guildId, attempt }, 'Rejoined voice channel');
+        return true;
+      } catch (error) {
+        log.info(
+          {
+            guildId: this.guildId,
+            attempt,
+            error: error instanceof Error ? error.message : String(error),
+          },
+          'Rejoin attempt failed',
+        );
+        await new Promise((r) => setTimeout(r, 2_000));
+      }
+    }
+    return false;
   }
 
   async playPrevious(): Promise<boolean> {
