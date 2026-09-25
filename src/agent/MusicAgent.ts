@@ -14,7 +14,7 @@ import type { Readable } from 'node:stream';
 import type { VoiceBasedChannel, TextChannel } from 'discord.js';
 import { QueueManager } from './QueueManager';
 import { GeminiAgent } from './GeminiAgent';
-import { YouTubeService, pickBestAudio } from '../services/YouTubeService';
+import { pickBestAudio, youtubeService, type YouTubeService } from '../services/YouTubeService';
 import { childLogger, createCorrelationId } from '../utils/logger';
 import { errorEmbed, type TrackInfo } from '../utils/embeds';
 import { errorText, explainError, explainErrorOr } from '../utils/errors';
@@ -51,7 +51,7 @@ export class MusicAgent {
   private volumePercent = DEFAULT_VOLUME;
   private preload: PreloadedStream | null = null;
   private readonly guildId: string;
-  private readonly youtube = new YouTubeService();
+  private readonly youtube = youtubeService;
   private readonly gemini = new GeminiAgent();
 
   constructor(guildId: string) {

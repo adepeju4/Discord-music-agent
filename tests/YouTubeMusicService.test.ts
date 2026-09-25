@@ -9,14 +9,29 @@ describe('YouTubeMusicService', () => {
     const results = await ytm.searchSongs('fela kuti water no get enemy', 3);
     expect(results.length).toBeGreaterThan(0);
     expect(results.length).toBeLessThanOrEqual(3);
-    const first = results[0];
-    expect(first.source).toBe('music');
-    expect(first.title.toLowerCase()).toContain('water no get enemy');
-    expect(first.artist).toContain('Fela Kuti');
-    expect(first.album).toBeTruthy();
-    expect(first.duration).toBeGreaterThan(0);
-    expect(first.url).toMatch(/youtube\.com\/watch\?v=/);
-    expect(first.thumbnail).toContain('=w544-h544');
+
+    // Every result must be a well-formed catalog entry.
+    for (const r of results) {
+      expect(r.source).toBe('music');
+      expect(r.title).toBeTruthy();
+      expect(r.artist).toBeTruthy();
+      expect(r.duration).toBeGreaterThan(0);
+      expect(r.url).toMatch(/youtube\.com\/watch\?v=/);
+      expect(r.thumbnail).toContain('=w544-h544');
+    }
+
+    // YouTube Music reorders results between identical calls and occasionally
+    // swaps one out, so assert the track is in the set rather than first.
+    const match = results.find(
+      (r) =>
+        r.title.toLowerCase().includes('water no get enemy') &&
+        (r.artist ?? '').includes('Fela Kuti'),
+    );
+    expect(
+      match,
+      `expected the track among: ${results.map((r) => r.title).join(', ')}`,
+    ).toBeTruthy();
+    expect(match!.album).toBeTruthy();
   }, 20_000);
 });
 

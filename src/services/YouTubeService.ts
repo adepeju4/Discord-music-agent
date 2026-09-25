@@ -144,6 +144,11 @@ export function pickBestAudio(
   return best;
 }
 
+/**
+ * Shared across guilds. The service holds no per-guild state, but it owns an
+ * InnerTube client with its own session bootstrap, so one instance per guild
+ * would duplicate that for nothing.
+ */
 export class YouTubeService {
   readonly music = new YouTubeMusicService();
 
@@ -331,3 +336,5 @@ export class YouTubeService {
     };
   }
 }
+
+export const youtubeService = new YouTubeService();

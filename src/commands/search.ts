@@ -9,10 +9,10 @@ import {
 import { getOrCreateAgent } from '../agent/MusicAgent';
 import { errorEmbed, infoEmbed, addedToQueueEmbed, nowPlayingEmbed } from '../utils/embeds';
 import { formatDuration } from '../utils/formatters';
-import { YouTubeService } from '../services/YouTubeService';
+import { youtubeService } from '../services/YouTubeService';
 import { resolveCallerVoiceChannel, NOT_IN_VOICE_MESSAGE } from '../utils/voiceState';
 
-const youtube = new YouTubeService();
+const youtube = youtubeService;
 
 export const data = new SlashCommandBuilder()
   .setName('search')
