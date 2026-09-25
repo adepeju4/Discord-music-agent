@@ -12,6 +12,7 @@ const envSchema = z.object({
   SPOTIFY_CLIENT_ID: z.string().optional(),
   SPOTIFY_CLIENT_SECRET: z.string().optional(),
   YTDLP_PATH: z.string().optional(),
+  YTDLP_PROXY: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);

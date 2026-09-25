@@ -1,4 +1,8 @@
 import { spawn, execFile } from 'node:child_process';
+import { copyFileSync, unlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { Readable, Transform } from 'node:stream';
 import { promisify } from 'node:util';
 import { config } from '../config';
@@ -7,14 +11,49 @@ import { ensureBinPath, resolveBinary } from '../utils/binaries';
 import type { TrackInfo } from '../utils/embeds';
 import { YouTubeMusicService } from './YouTubeMusicService';
 
-function cookieArgs(): string[] {
+interface CookieHandle {
+  args: string[];
+  release: () => void;
+}
+
+const NO_COOKIES: CookieHandle = { args: [], release: () => {} };
+
+/**
+ * yt-dlp writes the cookie jar back after every run, persisting whatever the
+ * server said — including the cleared session it returns with a bot check. That
+ * destroys the credentials on first failure, so it never gets a pristine copy:
+ * it gets a throwaway duplicate and its edits are discarded.
+ */
+function cookieArgs(): CookieHandle {
   if (config.YT_COOKIES_FILE) {
-    return ['--cookies', config.YT_COOKIES_FILE];
+    try {
+      const scratch = join(tmpdir(), `yt-cookies-${randomUUID()}.txt`);
+      copyFileSync(config.YT_COOKIES_FILE, scratch);
+      return {
+        args: ['--cookies', scratch],
+        release: () => {
+          try {
+            unlinkSync(scratch);
+          } catch {
+            // Already gone, or never created — nothing to clean up.
+          }
+        },
+      };
+    } catch (error) {
+      log.error(
+        {
+          file: config.YT_COOKIES_FILE,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        'Could not read the cookies file — continuing without cookies',
+      );
+      return NO_COOKIES;
+    }
   }
   if (config.YT_COOKIES_FROM_BROWSER) {
-    return ['--cookies-from-browser', config.YT_COOKIES_FROM_BROWSER];
+    return { args: ['--cookies-from-browser', config.YT_COOKIES_FROM_BROWSER], release: () => {} };
   }
-  return [];
+  return NO_COOKIES;
 }
 
 const AUDIO_BUFFER_BYTES = 2 * 1024 * 1024;
@@ -25,6 +64,18 @@ const log = childLogger({ module: 'YouTubeService' });
 ensureBinPath();
 const YT_DLP = resolveBinary('yt-dlp', config.YTDLP_PATH);
 log.info({ ytDlp: YT_DLP }, 'Using yt-dlp binary');
+
+/**
+ * YouTube refuses media requests from datacenter ranges ("Sign in to confirm
+ * you're not a bot"), so a host like a VPS needs to exit through an address
+ * YouTube will serve — a residential proxy, or a tunnel back to a home line.
+ */
+const PROXY_ARGS = config.YTDLP_PROXY ? ['--proxy', config.YTDLP_PROXY] : [];
+if (config.YTDLP_PROXY) {
+  // The value can carry credentials, so log only the shape of it.
+  const shape = config.YTDLP_PROXY.replace(/\/\/[^@]*@/, '//***@');
+  log.info({ proxy: shape }, 'Routing yt-dlp through a proxy');
+}
 
 if (config.YT_COOKIES_FILE) {
   log.info({ file: config.YT_COOKIES_FILE }, 'Using cookies file for YouTube requests');
@@ -156,11 +207,13 @@ export class YouTubeService {
     const correlationId = createCorrelationId();
     log.debug({ correlationId, query, limit }, 'Searching YouTube via yt-dlp');
 
+    const cookies = cookieArgs();
     try {
       const { stdout } = await execFileAsync(
         YT_DLP,
         [
-          ...cookieArgs(),
+          ...PROXY_ARGS,
+          ...cookies.args,
           `ytsearch${limit}:${query}`,
           '--dump-json',
           '--flat-playlist',
@@ -192,6 +245,8 @@ export class YouTubeService {
       const stderr = (error as { stderr?: string })?.stderr;
       log.error({ correlationId, error: errMsg, stderr }, 'YouTube search failed');
       return [];
+    } finally {
+      cookies.release();
     }
   }
 
@@ -200,8 +255,10 @@ export class YouTubeService {
     log.debug({ correlationId }, 'Getting audio stream via yt-dlp');
 
     return new Promise((resolve, reject) => {
+      const cookies = cookieArgs();
       const ytdlp = spawn(YT_DLP, [
-        ...cookieArgs(),
+        ...PROXY_ARGS,
+        ...cookies.args,
         '-f',
         'bestaudio[acodec=opus][ext=webm]/251/bestaudio',
         '--print',
@@ -276,6 +333,7 @@ export class YouTubeService {
       });
 
       ytdlp.once('error', (error) => {
+        cookies.release();
         log.error({ correlationId, error: error.message }, 'yt-dlp process error');
         if (!resolved) {
           resolved = true;
@@ -284,6 +342,7 @@ export class YouTubeService {
       });
 
       ytdlp.once('close', (code) => {
+        cookies.release();
         log.debug({ correlationId, code }, 'yt-dlp process closed');
         if (!resolved && code !== 0) {
           resolved = true;
