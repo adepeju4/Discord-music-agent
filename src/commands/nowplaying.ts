@@ -15,5 +15,5 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     return;
   }
 
-  await interaction.reply({ embeds: [nowPlayingEmbed(track, agent.elapsed)] });
+  await interaction.reply({ embeds: [nowPlayingEmbed(track)] });
 }

@@ -9,12 +9,6 @@ export function formatDuration(seconds: number): string {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
-export function progressBar(current: number, total: number, length = 15): string {
-  const filled = Math.round((current / total) * length);
-  const empty = length - filled;
-  return `${'▓'.repeat(filled)}${'░'.repeat(empty)}`;
-}
-
 export function truncate(str: string, maxLength: number): string {
   if (str.length <= maxLength) return str;
   return str.slice(0, maxLength - 3) + '...';

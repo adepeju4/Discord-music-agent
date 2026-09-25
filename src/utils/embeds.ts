@@ -1,5 +1,5 @@
 import { EmbedBuilder } from 'discord.js';
-import { formatDuration, progressBar } from './formatters';
+import { formatDuration } from './formatters';
 
 export interface TrackInfo {
   title: string;
@@ -8,17 +8,20 @@ export interface TrackInfo {
   thumbnail?: string;
   requestedBy: string;
   artist?: string;
+  album?: string;
 }
 
-export function nowPlayingEmbed(track: TrackInfo, elapsed: number): EmbedBuilder {
-  const bar = progressBar(elapsed, track.duration);
-  const elapsedStr = formatDuration(elapsed);
-  const totalStr = formatDuration(track.duration);
+/** Plain title — no YouTube link, since the source is an implementation detail. */
+function trackLine(track: TrackInfo): string {
+  const meta = [track.artist, track.album].filter(Boolean).join(' · ');
+  return meta ? `**${track.title}**\n${meta}` : `**${track.title}**`;
+}
 
+export function nowPlayingEmbed(track: TrackInfo): EmbedBuilder {
   const embed = new EmbedBuilder()
     .setTitle('Now Playing')
-    .setDescription(`**[${track.title}](${track.url})**`)
-    .addFields({ name: 'Progress', value: `${bar} \`${elapsedStr} / ${totalStr}\`` })
+    .setDescription(trackLine(track))
+    .addFields({ name: 'Length', value: formatDuration(track.duration), inline: true })
     .setColor(0x5865f2)
     .setFooter({ text: `Requested by ${track.requestedBy}` });
 
@@ -76,13 +79,91 @@ export function queueEmbed(
 export function addedToQueueEmbed(track: TrackInfo, position: number): EmbedBuilder {
   return new EmbedBuilder()
     .setTitle('Added to Queue')
-    .setDescription(`**[${track.title}](${track.url})**`)
+    .setDescription(trackLine(track))
     .addFields(
       { name: 'Duration', value: formatDuration(track.duration), inline: true },
       { name: 'Position', value: `#${position}`, inline: true },
     )
     .setColor(0x57f287)
     .setFooter({ text: `Requested by ${track.requestedBy}` });
+}
+
+const COLLECTION_PREVIEW = 15;
+
+export function collectionEmbed(
+  heading: string,
+  tracks: Array<{ title: string; artist?: string; duration?: number }>,
+  options: { note?: string; footer?: string; thumbnail?: string; url?: string } = {},
+): EmbedBuilder {
+  const shown = tracks.slice(0, COLLECTION_PREVIEW);
+  const lines = shown.map((t, i) => {
+    const label = t.artist ? `${t.title} — ${t.artist}` : t.title;
+    const dur = t.duration ? ` (${formatDuration(t.duration)})` : '';
+    return `\`${i + 1}.\` ${label}${dur}`;
+  });
+  if (tracks.length > shown.length) {
+    lines.push(`_…and ${tracks.length - shown.length} more_`);
+  }
+  const list = lines.join('\n');
+  const description = options.note ? `_${options.note}_\n\n${list}` : list;
+
+  const embed = new EmbedBuilder()
+    .setTitle(heading)
+    .setDescription(description || '_empty_')
+    .setColor(0xfee75c)
+    .setFooter({ text: options.footer ?? `${tracks.length} tracks` });
+  if (options.thumbnail) embed.setThumbnail(options.thumbnail);
+  if (options.url) embed.setURL(options.url);
+  return embed;
+}
+
+export interface PanelStateLike {
+  track: TrackInfo | null;
+  paused: boolean;
+  queueLength: number;
+  loopMode: 'off' | 'track' | 'queue';
+  volume?: number;
+}
+
+export function panelStateFrom(overrides: Partial<PanelStateLike> = {}): PanelStateLike {
+  return {
+    track: null,
+    paused: false,
+    queueLength: 0,
+    loopMode: 'off',
+    ...overrides,
+  };
+}
+
+export function panelEmbed(state: PanelStateLike): EmbedBuilder {
+  const { track } = state;
+  if (!track) {
+    return new EmbedBuilder()
+      .setTitle('Nothing playing')
+      .setDescription('Use `/play` to start something.')
+      .setColor(0x4f545c);
+  }
+
+  const embed = new EmbedBuilder()
+    .setTitle(state.paused ? 'Paused' : 'Now Playing')
+    .setDescription(trackLine(track))
+    .addFields({ name: 'Length', value: formatDuration(track.duration), inline: true })
+    .setColor(state.paused ? 0xfee75c : 0x5865f2);
+
+  const footer = [
+    `Requested by ${track.requestedBy}`,
+    state.queueLength > 0 ? `${state.queueLength} up next` : null,
+    state.loopMode === 'track'
+      ? 'Looping track'
+      : state.loopMode === 'queue'
+        ? 'Looping queue'
+        : null,
+    state.volume !== undefined && state.volume !== 100 ? `Volume ${state.volume}%` : null,
+  ].filter(Boolean);
+  embed.setFooter({ text: footer.join(' • ') });
+
+  if (track.thumbnail) embed.setThumbnail(track.thumbnail);
+  return embed;
 }
 
 export function errorEmbed(message: string): EmbedBuilder {

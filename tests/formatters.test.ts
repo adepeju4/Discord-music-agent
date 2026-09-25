@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatDuration, progressBar, truncate } from '../src/utils/formatters';
+import { formatDuration, truncate } from '../src/utils/formatters';
 
 describe('formatDuration', () => {
   it('formats seconds only', () => {
@@ -16,23 +16,6 @@ describe('formatDuration', () => {
 
   it('formats zero', () => {
     expect(formatDuration(0)).toBe('0:00');
-  });
-});
-
-describe('progressBar', () => {
-  it('shows empty bar at 0%', () => {
-    const bar = progressBar(0, 100, 10);
-    expect(bar).toBe('░░░░░░░░░░');
-  });
-
-  it('shows full bar at 100%', () => {
-    const bar = progressBar(100, 100, 10);
-    expect(bar).toBe('▓▓▓▓▓▓▓▓▓▓');
-  });
-
-  it('shows half bar at 50%', () => {
-    const bar = progressBar(50, 100, 10);
-    expect(bar).toBe('▓▓▓▓▓░░░░░');
   });
 });
 

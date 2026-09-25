@@ -11,6 +11,7 @@ import {
   TextInputStyle,
 } from 'discord.js';
 import { getOrCreateAgent } from '../agent/MusicAgent';
+import { DEFAULT_RECENT_SHARE } from '../agent/GeminiAgent';
 import { errorEmbed, infoEmbed, playlistEmbed } from '../utils/embeds';
 import { config } from '../config';
 import { childLogger, createCorrelationId } from '../utils/logger';
@@ -52,11 +53,20 @@ export const data = new SlashCommandBuilder()
   .setDescription('Build a playlist interactively with AI')
   .addStringOption((opt) =>
     opt.setName('theme').setDescription('Describe a vibe, mood, or theme').setRequired(true),
+  )
+  .addIntegerOption((opt) =>
+    opt
+      .setName('recent')
+      .setDescription('How much should be recent releases? Default 60%')
+      .setMinValue(0)
+      .setMaxValue(100)
+      .setRequired(false),
   );
 
 export async function execute(interaction: ChatInputCommandInteraction) {
   const correlationId = createCorrelationId();
   const theme = interaction.options.getString('theme', true);
+  const recentShare = interaction.options.getInteger('recent') ?? DEFAULT_RECENT_SHARE;
 
   const voiceChannel = resolveCallerVoiceChannel(interaction);
   if (!voiceChannel) {
@@ -83,7 +93,8 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
   log.info({ correlationId, theme, guildId }, 'Starting playlist draft');
 
-  const result = await agent.geminiAgent.curatePlaylst(theme);
+  const pools = await agent.youtubeService.music.collectThemePools(theme);
+  const result = await agent.geminiAgent.curatePlaylst(theme, pools, recentShare);
 
   if (!result.tracks || result.tracks.length === 0) {
     await interaction.editReply({ embeds: [errorEmbed(result.message)] });
@@ -91,13 +102,13 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   }
 
   const tracks = result.tracks.slice(0, config.MAX_PLAYLIST_SIZE);
-  setDraft({ guildId, userId: interaction.user.id, theme, tracks });
+  setDraft({ guildId, userId: interaction.user.id, theme, tracks, recentShare });
 
   await interaction.editReply({
     embeds: [
       playlistEmbed(theme, tracks, {
         note: 'Draft — click **Refine** to tweak or **Queue it** to start playing.',
-        footer: `${tracks.length} tracks • draft expires in 5 min`,
+        footer: `${tracks.length} tracks • ~${recentShare}% recent • draft expires in 5 min`,
       }),
     ],
     components: [draftButtons(interaction.user.id)],
@@ -221,6 +232,7 @@ export async function handleModal(interaction: ModalSubmitInteraction): Promise<
     userId,
     theme: draft.theme,
     tracks: revised,
+    recentShare: draft.recentShare,
   });
 
   try {
@@ -278,7 +290,8 @@ async function handleRegenerate(
   const correlationId = createCorrelationId();
   log.info({ correlationId, theme: draft.theme }, 'Regenerating playlist draft');
 
-  const result = await agent.geminiAgent.curatePlaylst(draft.theme);
+  const pools = await agent.youtubeService.music.collectThemePools(draft.theme);
+  const result = await agent.geminiAgent.curatePlaylst(draft.theme, pools, draft.recentShare);
   if (!result.tracks || result.tracks.length === 0) {
     await interaction.followUp({
       embeds: [errorEmbed(result.message || 'Failed to regenerate.')],
@@ -293,13 +306,14 @@ async function handleRegenerate(
     userId: draft.userId,
     theme: draft.theme,
     tracks,
+    recentShare: draft.recentShare,
   });
 
   await interaction.editReply({
     embeds: [
       playlistEmbed(updated.theme, updated.tracks, {
         note: 'Regenerated. Refine again or queue it.',
-        footer: `${tracks.length} tracks • draft expires in 5 min`,
+        footer: `${tracks.length} tracks • ~${draft.recentShare}% recent • draft expires in 5 min`,
       }),
     ],
     components: [draftButtons(draft.userId)],
@@ -375,6 +389,8 @@ async function handleQueueIt(interaction: ButtonInteraction, draft: PlaylistDraf
       title: c.title,
       channel: c.artist,
       duration: c.duration,
+      album: c.album,
+      source: c.source,
     })),
   }));
 
@@ -389,7 +405,7 @@ async function handleQueueIt(interaction: ButtonInteraction, draft: PlaylistDraf
     const sr =
       llmIdx !== null && llmIdx >= 0 && llmIdx < candidates.length
         ? candidates[llmIdx]
-        : pickBestAudio(candidates, intent.artist);
+        : pickBestAudio(candidates, intent.artist, `${intent.title} ${intent.artist}`);
 
     if (!sr) {
       log.info(

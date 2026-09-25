@@ -23,7 +23,7 @@ describe('YouTubeService', () => {
     const result = await yt.searchOne('rick astley never gonna give you up');
     expect(result).not.toBeNull();
 
-    const stream = await yt.getStream(result!.url);
+    const { stream } = await yt.getStream(result!.url);
     const bytes = await new Promise<number>((resolve, reject) => {
       let total = 0;
       stream.on('data', (chunk: Buffer) => {

@@ -9,6 +9,9 @@ const envSchema = z.object({
   GEMINI_API_KEY: z.string().min(1, 'GEMINI_API_KEY is required'),
   YT_COOKIES_FILE: z.string().optional(),
   YT_COOKIES_FROM_BROWSER: z.string().optional(),
+  SPOTIFY_CLIENT_ID: z.string().optional(),
+  SPOTIFY_CLIENT_SECRET: z.string().optional(),
+  YTDLP_PATH: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -27,4 +30,6 @@ export const config = {
   BOT_PREFIX: '/',
   MAX_QUEUE_SIZE: 200,
   MAX_PLAYLIST_SIZE: 15,
+  MAX_IMPORT_SIZE: 100,
+  MAX_RADIO_SIZE: 25,
 } as const;

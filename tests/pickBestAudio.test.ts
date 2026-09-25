@@ -42,11 +42,7 @@ describe('pickBestAudio', () => {
   });
 
   it('falls back to index tiebreaker when all signals are equal', () => {
-    const picked = pickBestAudio([
-      r('Some Song'),
-      r('Some Song Alt'),
-      r('Some Song Third'),
-    ]);
+    const picked = pickBestAudio([r('Some Song'), r('Some Song Alt'), r('Some Song Third')]);
     // Plain titles with same score → earliest wins
     expect(picked?.title).toBe('Some Song');
   });
@@ -83,11 +79,7 @@ describe('pickBestAudio', () => {
 
     it('picks a Topic channel upload when present', () => {
       const picked = pickBestAudio(
-        [
-          r('Halo', 'Beyoncé'),
-          r('Halo', 'Beyoncé - Topic'),
-          r('Halo (Lyrics)', 'Melody Music'),
-        ],
+        [r('Halo', 'Beyoncé'), r('Halo', 'Beyoncé - Topic'), r('Halo (Lyrics)', 'Melody Music')],
         'Beyoncé',
       );
       expect(picked?.artist).toBe('Beyoncé - Topic');
@@ -95,10 +87,7 @@ describe('pickBestAudio', () => {
 
     it('still prefers Official Audio over a non-official artist upload', () => {
       const picked = pickBestAudio(
-        [
-          r('Song (Live)', 'Artist'),
-          r('Song (Official Audio)', 'Some Music Channel'),
-        ],
+        [r('Song (Live)', 'Artist'), r('Song (Official Audio)', 'Some Music Channel')],
         'Artist',
       );
       expect(picked?.title).toBe('Song (Official Audio)');
@@ -106,13 +95,95 @@ describe('pickBestAudio', () => {
 
     it('penalizes lyric videos by fan channels', () => {
       const picked = pickBestAudio(
-        [
-          r('Song - Artist', 'Artist'),
-          r('Song - Artist (Lyrics)', 'Lyric Uploader'),
-        ],
+        [r('Song - Artist', 'Artist'), r('Song - Artist (Lyrics)', 'Lyric Uploader')],
         'Artist',
       );
       expect(picked?.artist).toBe('Artist');
     });
+  });
+});
+
+describe('pickBestAudio with catalog results', () => {
+  function song(title: string, artist: string, album?: string): SearchResult {
+    return {
+      title,
+      artist,
+      album,
+      url: 'https://youtube.com/watch?v=song-' + encodeURIComponent(title),
+      duration: 200,
+      source: 'music',
+    };
+  }
+  function video(title: string, channel = 'Some Channel'): SearchResult {
+    return { ...r(title, channel), source: 'video' };
+  }
+
+  it('prefers a matching catalog song over every video signal', () => {
+    const picked = pickBestAudio(
+      [
+        video('Stateside (Official Audio)', 'PinkPantheress'),
+        video('Stateside', 'PinkPantheress - Topic'),
+        song('Stateside', 'PinkPantheress', 'Fancy That'),
+      ],
+      'PinkPantheress',
+      'pinkpantheress stateside',
+    );
+    expect(picked?.source).toBe('music');
+  });
+
+  it('ignores catalog songs whose artist does not match the expected artist', () => {
+    const picked = pickBestAudio(
+      [
+        song('Hello', 'Lionel Richie', "Can't Slow Down"),
+        video('Adele - Hello (Official Audio)', 'Adele'),
+      ],
+      'Adele',
+    );
+    expect(picked?.artist).toBe('Adele');
+  });
+
+  it('ignores catalog songs that do not resemble the query', () => {
+    const picked = pickBestAudio(
+      [
+        song('It Makes You Forget (Itgehane)', 'Peggy Gou', 'Once'),
+        video('Peggy Gou Boiler Room London DJ Set', 'Boiler Room'),
+      ],
+      undefined,
+      'peggy gou boiler room set',
+    );
+    expect(picked?.source).toBe('video');
+  });
+
+  it('does not penalize a variant the query asked for', () => {
+    const picked = pickBestAudio(
+      [
+        song('Lonely At The Top', 'Asake', 'Work Of Art'),
+        song('Lonely At The Top (Remix)', 'Asake, H.E.R.', 'Lonely At The Top (Remix)'),
+      ],
+      'Asake',
+      'asake lonely at the top remix',
+    );
+    expect(picked?.title).toBe('Lonely At The Top (Remix)');
+  });
+
+  it('prefers the original over remix and acoustic variants by default', () => {
+    const picked = pickBestAudio(
+      [
+        song('Lonely At The Top (Remix)', 'Asake, H.E.R.', 'Lonely At The Top (Remix)'),
+        song('Lonely At The Top (Acoustic)', 'Asake, H.E.R.', 'Lonely At The Top EP'),
+        song('Lonely At The Top', 'Asake', 'Work Of Art'),
+      ],
+      'Asake',
+      'asake lonely at the top',
+    );
+    expect(picked?.title).toBe('Lonely At The Top');
+  });
+
+  it('accepts a catalog song when neither artist nor query is supplied', () => {
+    const picked = pickBestAudio([
+      video('Some Song (Official Video)', 'Artist'),
+      song('Some Song', 'Artist'),
+    ]);
+    expect(picked?.source).toBe('music');
   });
 });

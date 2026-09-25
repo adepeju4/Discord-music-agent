@@ -2,8 +2,11 @@ import type { TrackInfo } from '../utils/embeds';
 
 export type LoopMode = 'off' | 'track' | 'queue';
 
+const MAX_HISTORY = 50;
+
 export class QueueManager {
   private tracks: TrackInfo[] = [];
+  private history: TrackInfo[] = [];
   private current: TrackInfo | null = null;
   public loopMode: LoopMode = 'off';
 
@@ -21,6 +24,10 @@ export class QueueManager {
 
   get allTracks(): TrackInfo[] {
     return [...this.tracks];
+  }
+
+  get hasPrevious(): boolean {
+    return this.history.length > 0;
   }
 
   add(track: TrackInfo): number {
@@ -58,12 +65,42 @@ export class QueueManager {
       this.tracks.push(this.current);
     }
 
+    if (this.current) this.pushHistory(this.current);
+
     const next = this.tracks.shift() ?? null;
     this.current = next;
     return next;
   }
 
-  setCurrent(track: TrackInfo): void {
+  /**
+   * What next() would return, without mutating anything. Used to prefetch the
+   * upcoming track's audio while the current one is still playing.
+   */
+  peek(): TrackInfo | null {
+    if (this.loopMode === 'track') return this.current;
+    if (this.tracks.length > 0) return this.tracks[0];
+    if (this.loopMode === 'queue') return this.current;
+    return null;
+  }
+
+  /**
+   * Steps back to the track that played before this one, pushing the current
+   * track to the front of the queue so nothing is lost.
+   */
+  previous(): TrackInfo | null {
+    const previous = this.history.pop();
+    if (!previous) return null;
+    if (this.current) this.tracks.unshift(this.current);
+    this.current = previous;
+    return previous;
+  }
+
+  private pushHistory(track: TrackInfo): void {
+    this.history.push(track);
+    if (this.history.length > MAX_HISTORY) this.history.shift();
+  }
+
+  setCurrent(track: TrackInfo | null): void {
     this.current = track;
   }
 
@@ -81,6 +118,7 @@ export class QueueManager {
 
   clear(): void {
     this.tracks = [];
+    this.history = [];
     this.current = null;
     this.loopMode = 'off';
   }

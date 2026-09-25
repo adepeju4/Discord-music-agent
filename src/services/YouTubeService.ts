@@ -3,7 +3,9 @@ import { Readable, Transform } from 'node:stream';
 import { promisify } from 'node:util';
 import { config } from '../config';
 import { childLogger, createCorrelationId } from '../utils/logger';
+import { ensureBinPath, resolveBinary } from '../utils/binaries';
 import type { TrackInfo } from '../utils/embeds';
+import { YouTubeMusicService } from './YouTubeMusicService';
 
 function cookieArgs(): string[] {
   if (config.YT_COOKIES_FILE) {
@@ -15,12 +17,14 @@ function cookieArgs(): string[] {
   return [];
 }
 
+const AUDIO_BUFFER_BYTES = 2 * 1024 * 1024;
+
 const execFileAsync = promisify(execFile);
 const log = childLogger({ module: 'YouTubeService' });
 
-if (!process.env.PATH?.includes('/opt/homebrew/bin')) {
-  process.env.PATH = `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH}`;
-}
+ensureBinPath();
+const YT_DLP = resolveBinary('yt-dlp', config.YTDLP_PATH);
+log.info({ ytDlp: YT_DLP }, 'Using yt-dlp binary');
 
 if (config.YT_COOKIES_FILE) {
   log.info({ file: config.YT_COOKIES_FILE }, 'Using cookies file for YouTube requests');
@@ -33,20 +37,56 @@ if (config.YT_COOKIES_FILE) {
   log.info('No cookies configured — yt-dlp will use anonymous requests');
 }
 
+export type SearchSource = 'music' | 'video';
+
+export function videoIdFromUrl(url: string): string | null {
+  const m = /[?&]v=([A-Za-z0-9_-]{11})/.exec(url);
+  return m ? m[1] : null;
+}
+
 export interface SearchResult {
   title: string;
   url: string;
   duration: number;
   thumbnail?: string;
   artist?: string;
+  album?: string;
+  source?: SearchSource;
 }
 
-function scoreResult(r: SearchResult, index: number, expectedArtist?: string): number {
+function queryTokens(text: string): string[] {
+  return text
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((t) => t.length >= 3);
+}
+
+function queryOverlap(r: SearchResult, query?: string): number {
+  if (!query) return 1;
+  const wanted = queryTokens(query);
+  if (wanted.length === 0) return 1;
+  const haystack = queryTokens(`${r.title} ${r.artist ?? ''} ${r.album ?? ''}`);
+  const hits = wanted.filter((t) => haystack.includes(t)).length;
+  return hits / wanted.length;
+}
+
+function scoreResult(
+  r: SearchResult,
+  index: number,
+  expectedArtist?: string,
+  query?: string,
+): number {
   const title = r.title.toLowerCase();
   const channel = (r.artist ?? '').toLowerCase();
   let score = 0;
 
-  if (expectedArtist) {
+  if (r.source === 'music') {
+    const a = expectedArtist?.toLowerCase().trim();
+    const artistOk = !a || a.length < 2 || channel.includes(a);
+    const overlap = queryOverlap(r, query);
+    if (artistOk && overlap >= 0.6) score += Math.round(300 * overlap);
+    else score -= 100;
+  } else if (expectedArtist) {
     const a = expectedArtist.toLowerCase().trim();
     if (a.length >= 2) {
       if (channel === `${a} - topic`) score += 150;
@@ -67,10 +107,12 @@ function scoreResult(r: SearchResult, index: number, expectedArtist?: string): n
     if (/vevo$/.test(channel)) score += 60;
   }
 
-  if (/\b(live|concert|performance|tour)\b/.test(title)) score -= 40;
-  if (/\b(cover|remix|mashup|edit|sped up|slowed|nightcore|8d)\b/.test(title)) score -= 50;
-  if (/\b(reaction|review|tutorial|how to)\b/.test(title)) score -= 80;
-  if (/\b(karaoke|instrumental|acapella)\b/.test(title)) score -= 60;
+  const q = query?.toLowerCase() ?? '';
+  const unwanted = (re: RegExp) => re.test(title) && !re.test(q);
+  if (unwanted(/\b(live|concert|performance|tour)\b/)) score -= 40;
+  if (unwanted(/\b(cover|remix|mashup|edit|sped up|slowed|nightcore|8d|acoustic)\b/)) score -= 50;
+  if (unwanted(/\b(reaction|review|tutorial|how to)\b/)) score -= 80;
+  if (unwanted(/\b(karaoke|instrumental|acapella)\b/)) score -= 60;
 
   if (/\b(lyrics|lyric video)\b/.test(title)) {
     if (expectedArtist && channel.includes(expectedArtist.toLowerCase().trim())) {
@@ -87,12 +129,13 @@ function scoreResult(r: SearchResult, index: number, expectedArtist?: string): n
 export function pickBestAudio(
   results: SearchResult[],
   expectedArtist?: string,
+  query?: string,
 ): SearchResult | null {
   if (results.length === 0) return null;
   let best = results[0];
-  let bestScore = scoreResult(best, 0, expectedArtist);
+  let bestScore = scoreResult(best, 0, expectedArtist, query);
   for (let i = 1; i < results.length; i++) {
-    const s = scoreResult(results[i], i, expectedArtist);
+    const s = scoreResult(results[i], i, expectedArtist, query);
     if (s > bestScore) {
       best = results[i];
       bestScore = s;
@@ -102,14 +145,22 @@ export function pickBestAudio(
 }
 
 export class YouTubeService {
+  readonly music = new YouTubeMusicService();
+
   async search(query: string, limit = 5): Promise<SearchResult[]> {
     const correlationId = createCorrelationId();
     log.debug({ correlationId, query, limit }, 'Searching YouTube via yt-dlp');
 
     try {
       const { stdout } = await execFileAsync(
-        '/opt/homebrew/bin/yt-dlp',
-        [...cookieArgs(), `ytsearch${limit}:${query}`, '--dump-json', '--flat-playlist', '--no-warnings'],
+        YT_DLP,
+        [
+          ...cookieArgs(),
+          `ytsearch${limit}:${query}`,
+          '--dump-json',
+          '--flat-playlist',
+          '--no-warnings',
+        ],
         { timeout: 30_000 },
       );
 
@@ -125,6 +176,7 @@ export class YouTubeService {
             duration: Math.floor(data.duration ?? 0),
             thumbnail: data.thumbnail ?? data.thumbnails?.[0]?.url,
             artist: data.channel ?? data.uploader,
+            source: 'video' as const,
           };
         });
 
@@ -143,7 +195,7 @@ export class YouTubeService {
     log.debug({ correlationId }, 'Getting audio stream via yt-dlp');
 
     return new Promise((resolve, reject) => {
-      const ytdlp = spawn('/opt/homebrew/bin/yt-dlp', [
+      const ytdlp = spawn(YT_DLP, [
         ...cookieArgs(),
         '-f',
         'bestaudio[acodec=opus][ext=webm]/251/bestaudio',
@@ -157,16 +209,31 @@ export class YouTubeService {
 
       let resolved = false;
       let detectedFormat: 'webm-opus' | 'arbitrary' = 'arbitrary';
+      let lastError = '';
 
       const formatLineRe = /^([a-z0-9]+)\/([a-z0-9._-]+)$/i;
 
+      // Default highWaterMark is 16 KB — about a second of audio. Importing a
+      // playlist spawns yt-dlp processes that compete for CPU, and a buffer that
+      // small underruns as soon as the producer is starved, which Discord plays
+      // back as stuttering. ~2 MB buffers roughly two minutes instead.
       const tap = new Transform({
+        highWaterMark: AUDIO_BUFFER_BYTES,
         transform(chunk: Buffer, _enc, cb) {
           cb(null, chunk);
         },
       });
 
       ytdlp.stdout.pipe(tap);
+
+      // Whoever owns the stream may drop it (skip, stop, or a discarded
+      // prefetch). Without this the yt-dlp process lingers holding a socket.
+      tap.once('close', () => {
+        if (ytdlp.exitCode === null && !ytdlp.killed) {
+          log.debug({ correlationId }, 'Stream closed early, terminating yt-dlp');
+          ytdlp.kill('SIGKILL');
+        }
+      });
 
       tap.once('readable', () => {
         if (!resolved) {
@@ -195,6 +262,7 @@ export class YouTubeService {
           }
 
           if (/^(ERROR|WARNING):/i.test(trimmed)) {
+            if (/^ERROR:/i.test(trimmed)) lastError = trimmed;
             log.error({ correlationId, stderr: trimmed }, 'yt-dlp stderr');
           } else {
             log.debug({ correlationId, stderr: trimmed }, 'yt-dlp stderr');
@@ -214,7 +282,8 @@ export class YouTubeService {
         log.debug({ correlationId, code }, 'yt-dlp process closed');
         if (!resolved && code !== 0) {
           resolved = true;
-          reject(new Error(`yt-dlp exited with code ${code}`));
+          // Surface yt-dlp's own reason; an exit code alone tells a user nothing.
+          reject(new Error(lastError || `yt-dlp exited with code ${code}`));
         }
       });
 
@@ -222,20 +291,32 @@ export class YouTubeService {
         if (!resolved) {
           resolved = true;
           ytdlp.kill();
-          reject(new Error('Stream timeout — no audio data received in 30s'));
+          reject(new Error(lastError || 'Stream timeout — no audio data received in 30s'));
         }
       }, 30_000);
     });
   }
 
   async searchOne(query: string, expectedArtist?: string): Promise<SearchResult | null> {
-    const results = await this.search(query, 5);
+    const results = await this.searchCandidates(query, 5);
     if (results.length === 0) return null;
-    return pickBestAudio(results, expectedArtist);
+    return pickBestAudio(results, expectedArtist, query);
   }
 
   async searchCandidates(query: string, limit = 5): Promise<SearchResult[]> {
-    return this.search(query, limit);
+    const [songs, videos] = await Promise.all([
+      this.music.searchSongs(query, limit),
+      this.search(query, limit),
+    ]);
+
+    const seen = new Set<string>();
+    const merged: SearchResult[] = [];
+    for (const r of [...songs, ...videos]) {
+      if (seen.has(r.url)) continue;
+      seen.add(r.url);
+      merged.push(r);
+    }
+    return merged;
   }
 
   toTrackInfo(result: SearchResult, requestedBy: string): TrackInfo {
@@ -245,6 +326,7 @@ export class YouTubeService {
       duration: result.duration,
       thumbnail: result.thumbnail,
       artist: result.artist,
+      album: result.album,
       requestedBy,
     };
   }

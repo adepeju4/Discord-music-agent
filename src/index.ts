@@ -12,6 +12,7 @@ import { commands } from './commands/index';
 import { agents } from './agent/MusicAgent';
 import { createCorrelationId, childLogger } from './utils/logger';
 import { errorEmbed } from './utils/embeds';
+import { explainError } from './utils/errors';
 import { musicChannels } from './musicChannels';
 import {
   isPlaylistInteraction,
@@ -23,6 +24,7 @@ import {
   handleButton as handleQueueButton,
   handleModal as handleQueueModal,
 } from './commands/queue';
+import { isPanelInteraction, handleButton as handlePanelButton } from './commands/panel';
 
 const log = childLogger({ module: 'bot' });
 
@@ -84,7 +86,11 @@ async function runInteraction<T extends Interaction>(
   } catch (error) {
     log.error({ ...ctx, ...unpackError(error) }, 'Interaction failed');
     if (interaction.isChatInputCommand() || interaction.isButton() || interaction.isModalSubmit()) {
-      await replyWithError(interaction);
+      const reason = explainError(error);
+      await replyWithError(
+        interaction,
+        reason ?? "That didn't work, and the reason wasn't something I recognise. Try again.",
+      );
     }
   }
 }
@@ -107,6 +113,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
         interaction,
         { correlationId, kind: 'queue-button', userId, guildId, customId: interaction.customId },
         handleQueueButton,
+      );
+    }
+    if (isPanelInteraction(interaction.customId)) {
+      return runInteraction(
+        interaction,
+        { correlationId, kind: 'panel-button', userId, guildId, customId: interaction.customId },
+        handlePanelButton,
       );
     }
     return;

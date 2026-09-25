@@ -3,10 +3,11 @@ import { existsSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import dotenv from 'dotenv';
+import { resolveBinary } from '../src/utils/binaries';
 
 dotenv.config();
 
-const YT_DLP = '/opt/homebrew/bin/yt-dlp';
+const YT_DLP = resolveBinary('yt-dlp', process.env.YTDLP_PATH);
 const DEFAULT_OUTPUT = resolve(homedir(), '.yt-cookies.txt');
 const PROBE_URL = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ';
 

@@ -7,6 +7,8 @@ export interface PlaylistDraft {
   guildId: string;
   theme: string;
   tracks: Array<{ title: string; artist: string }>;
+  /** Percentage of the playlist drawn from recent releases. */
+  recentShare: number;
   createdAt: number;
 }
 
@@ -46,6 +48,7 @@ export function setDraft(draft: Omit<PlaylistDraft, 'createdAt'>): PlaylistDraft
     guildId: stored.guildId,
     theme: stored.theme,
     tracks: stored.tracks,
+    recentShare: stored.recentShare,
     createdAt: stored.createdAt,
   };
 }
@@ -58,6 +61,7 @@ export function getDraft(guildId: string, userId: string): PlaylistDraft | null 
     guildId: stored.guildId,
     theme: stored.theme,
     tracks: stored.tracks,
+    recentShare: stored.recentShare,
     createdAt: stored.createdAt,
   };
 }

@@ -210,3 +210,88 @@ describe('QueueManager', () => {
     });
   });
 });
+
+describe('QueueManager history', () => {
+  function track(title: string): TrackInfo {
+    return { title, url: `https://x/${title}`, duration: 100, requestedBy: 'tester' };
+  }
+
+  it('steps back to the previous track and keeps the current one queued', () => {
+    const q = new QueueManager();
+    q.add(track('a'));
+    q.add(track('b'));
+    expect(q.hasPrevious).toBe(false);
+
+    expect(q.next()?.title).toBe('a');
+    expect(q.hasPrevious).toBe(false);
+    expect(q.next()?.title).toBe('b');
+    expect(q.hasPrevious).toBe(true);
+
+    expect(q.previous()?.title).toBe('a');
+    expect(q.nowPlaying?.title).toBe('a');
+    // 'b' was not discarded — it is next in line again.
+    expect(q.next()?.title).toBe('b');
+  });
+
+  it('returns null when there is nothing before the current track', () => {
+    const q = new QueueManager();
+    q.add(track('only'));
+    q.next();
+    expect(q.previous()).toBeNull();
+  });
+
+  it('forgets history on clear', () => {
+    const q = new QueueManager();
+    q.add(track('a'));
+    q.add(track('b'));
+    q.next();
+    q.next();
+    expect(q.hasPrevious).toBe(true);
+    q.clear();
+    expect(q.hasPrevious).toBe(false);
+    expect(q.previous()).toBeNull();
+  });
+});
+
+describe('QueueManager peek', () => {
+  function t(title: string): TrackInfo {
+    return { title, url: `https://x/${title}`, duration: 100, requestedBy: 'tester' };
+  }
+
+  it('reports the upcoming track without consuming it', () => {
+    const q = new QueueManager();
+    q.add(t('a'));
+    q.add(t('b'));
+    expect(q.peek()?.title).toBe('a');
+    expect(q.length).toBe(2);
+    expect(q.next()?.title).toBe('a');
+    expect(q.peek()?.title).toBe('b');
+  });
+
+  it('returns null when the queue is empty and not looping', () => {
+    const q = new QueueManager();
+    q.add(t('only'));
+    q.next();
+    expect(q.peek()).toBeNull();
+  });
+
+  it('matches what next() actually returns under each loop mode', () => {
+    for (const mode of ['off', 'track', 'queue'] as const) {
+      const q = new QueueManager();
+      q.add(t('a'));
+      q.add(t('b'));
+      q.next();
+      q.loopMode = mode;
+      const peeked = q.peek();
+      expect(peeked?.title).toBe(q.next()?.title);
+    }
+  });
+
+  it('loops back to the current track when the queue drains in queue mode', () => {
+    const q = new QueueManager();
+    q.add(t('a'));
+    q.next();
+    q.loopMode = 'queue';
+    expect(q.peek()?.title).toBe('a');
+  });
+});

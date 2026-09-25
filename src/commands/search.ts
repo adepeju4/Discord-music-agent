@@ -35,14 +35,20 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
   await interaction.deferReply();
 
-  const results = await youtube.search(query, 5);
+  const candidates = await youtube.searchCandidates(query, 5);
+  const songs = candidates.filter((r) => r.source === 'music').slice(0, 3);
+  const videos = candidates.filter((r) => r.source !== 'music');
+  const results = [...songs, ...videos].slice(0, 5);
   if (results.length === 0) {
     await interaction.editReply({ embeds: [errorEmbed(`No results for "${query}".`)] });
     return;
   }
 
   const description = results
-    .map((r, i) => `\`${i + 1}.\` **${r.title}** — ${formatDuration(r.duration)}`)
+    .map((r, i) => {
+      const label = r.source === 'music' && r.artist ? `${r.title} — ${r.artist}` : r.title;
+      return `\`${i + 1}.\` **${label}** — ${formatDuration(r.duration)}`;
+    })
     .join('\n');
 
   const buttons = results.map((_, i) =>
@@ -76,7 +82,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
     if (!agent.isPlaying && !agent.isPaused) {
       await agent.playNext();
-      await pick.update({ embeds: [nowPlayingEmbed(track, 0)], components: [] });
+      await pick.update({ embeds: [nowPlayingEmbed(track)], components: [] });
     } else {
       await pick.update({ embeds: [addedToQueueEmbed(track, position)], components: [] });
     }

@@ -5,6 +5,34 @@ import type { TrackInfo } from '../utils/embeds';
 
 const log = childLogger({ module: 'GeminiAgent' });
 
+// gemini-3-flash-preview spends "thinking" tokens out of the same budget as the
+// reply, and they routinely dwarf the JSON we actually want. These caps are the
+// measured worst case plus headroom — too low and the reply is truncated
+// mid-JSON, which surfaces as a silent fallback to the regex ranker.
+const TOKEN_BUDGET = {
+  pickSingle: 4096,
+  pickBatch: 16384,
+  interpret: 4096,
+  playlist: 16384,
+  refine: 8192,
+} as const;
+
+export interface PickCandidate {
+  title: string;
+  channel?: string;
+  duration: number;
+  album?: string;
+  source?: 'music' | 'video';
+}
+
+function describeCandidate(c: PickCandidate): string {
+  if (c.source === 'music') {
+    const album = c.album ? `, album: "${c.album}"` : '';
+    return `[CATALOG] "${c.title}" — artist: ${c.channel ?? 'Unknown'}${album}, duration: ${c.duration}s`;
+  }
+  return `[VIDEO] "${c.title}" — channel: ${c.channel ?? 'Unknown'}, duration: ${c.duration}s`;
+}
+
 export interface GeminiPlayAction {
   action: 'play';
   query: string;
@@ -29,6 +57,25 @@ export interface GeminiPlaylistAction {
   tracks: Array<{ title: string; artist: string }>;
 }
 
+export interface GeminiAlbumAction {
+  action: 'album';
+  artist: string;
+  album?: string | null;
+  message: string;
+}
+
+export interface GeminiRadioAction {
+  action: 'radio';
+  seed: string;
+  message: string;
+}
+
+export interface GeminiCuratedAction {
+  action: 'curated';
+  theme: string;
+  message: string;
+}
+
 export interface GeminiRejectAction {
   action: 'reject';
   message: string;
@@ -39,6 +86,9 @@ export type GeminiAction =
   | GeminiClarifyAction
   | GeminiSuggestAction
   | GeminiPlaylistAction
+  | GeminiAlbumAction
+  | GeminiRadioAction
+  | GeminiCuratedAction
   | GeminiRejectAction;
 
 const SYSTEM_PROMPT = `You are a music assistant for a Discord bot. You ONLY handle music-related requests. Nothing else.
@@ -58,15 +108,27 @@ Given a user's request, respond with a JSON object. Pick ONE action:
    {"action": "clarify", "message": "<friendly question>", "suggestions": ["Song - Artist", "Song - Artist", ...]}
    Provide 3-5 suggestions.
 
-3. **suggest** — The request is a mood/genre/vibe. Return:
+3. **radio** — The user wants more music like something: "songs like X", "more of this", "keep it going", "radio off this", "similar to <artist>". Return:
+   {"action": "radio", "seed": "<song title by artist to seed from>", "message": "<friendly message>"}
+   Use the currently playing track as the seed when the user says "this"/"that" and something is playing. The bot builds a real radio station from the catalog — do NOT list tracks yourself.
+
+4. **curated** — The user describes a mood, genre, activity or vibe: "chill vibes", "afrobeats party", "study music", "90s r&b", "something to cook to". Return:
+   {"action": "curated", "theme": "<2-5 word search phrase for a real playlist>", "message": "<friendly message>"}
+   The theme is used to find REAL playlists in the music catalog, so phrase it the way a playlist would be named ("chill afrobeats", "90s r&b slow jams"). Do NOT list tracks yourself.
+
+5. **suggest** — Use ONLY when the user should choose between a few specific songs you can name, and neither radio nor curated fits. Return:
    {"action": "suggest", "message": "<friendly message>", "suggestions": ["Song - Artist", "Song - Artist", ...]}
    Provide 3-5 suggestions the user can pick from.
 
-4. **playlist** — The user explicitly asked for a playlist or multiple songs around a theme. Return:
+6. **playlist** — The user asked for a playlist built around a creative or very specific idea that a real playlist search would not match ("songs that sound like driving at 3am", "tracks that sample Fela"). Prefer "curated" for ordinary moods and genres. Return:
    {"action": "playlist", "message": "<friendly message about the playlist>", "tracks": [{"title": "...", "artist": "..."}, ...]}
    Provide 10-15 tracks.
 
-5. **reject** — The request is NOT about music. Return:
+7. **album** — The user wants a whole album (or EP) by an artist, e.g. "play Ayra Starr's album", "queue The Year I Turned 21", "play Burna Boy's latest album". Return:
+   {"action": "album", "artist": "<artist name>", "album": "<album title if the user named or clearly implied one, otherwise null>", "message": "<friendly message>"}
+   Do NOT list the tracks yourself. If you know which album they mean (e.g. "her debut album"), fill in the title. Leave it null if they just said "an album" / "their album", OR if they used a relative word like "latest", "newest", "new" or "most recent" — your knowledge of recent releases may be stale, and the bot will offer real choices with years.
+
+8. **reject** — The request is NOT about music. Return:
    {"action": "reject", "message": "I'm a music bot — I can only help with playing songs, playlists, and music recommendations!"}
 
 Rules:
@@ -74,11 +136,32 @@ Rules:
 - Do NOT answer general questions, trivia, jokes, coding help, math, or anything unrelated to music playback.
 - If the user gives a specific song name AND artist, use "play".
 - If the user gives a specific song name but no artist, and the song is well-known enough to be unambiguous, use "play". Otherwise "clarify".
-- If the user describes a mood, genre, or vibe, use "suggest".
-- Only use "playlist" when the user explicitly asks for a playlist, a set of songs, or uses /playlist.
+- If the user describes a mood, genre, or vibe, use "curated" — real playlists beat invented track lists.
+- If the user wants more music like something, use "radio".
+- Only use "playlist" when the theme is too creative or specific for a real playlist search to match.
+- Use "album" whenever the user asks for an album, EP, or record by an artist — never turn it into a "playlist".
 - Always include the artist in your query for "play" actions.
 - Keep messages short and friendly.
 - ONLY return valid JSON. No markdown, no code fences, no extra text.`;
+
+export const DEFAULT_RECENT_SHARE = 60;
+
+export interface ThemePools {
+  recent?: Array<{ title: string; artist?: string }>;
+  classic?: Array<{ title: string; artist?: string }>;
+}
+
+const PLAYLIST_BUILDER_PROMPT = `You build music playlists. You ONLY return JSON — no markdown, no code fences, no extra text.
+
+Return exactly this shape:
+{"action": "playlist", "message": "<one-line friendly summary of the playlist>", "tracks": [{"title": "...", "artist": "..."}, ...]}
+
+Rules:
+- Return 12-15 tracks.
+- "title" is the song title alone and "artist" is the performing artist — never combine them in one field.
+- Never repeat the same track, and never use the same artist more than twice.
+- Order the tracks so the set flows as a listening experience.
+- If the request is not about music, still return the JSON shape with an empty "tracks" array.`;
 
 export class GeminiAgent {
   private model;
@@ -90,7 +173,7 @@ export class GeminiAgent {
 
   async pickBestSingle(
     intent: { title?: string; artist?: string; rawQuery?: string },
-    candidates: Array<{ title: string; channel?: string; duration: number }>,
+    candidates: PickCandidate[],
   ): Promise<number | null> {
     if (candidates.length === 0) return null;
     if (candidates.length === 1) return 0;
@@ -103,12 +186,7 @@ export class GeminiAgent {
           ? `user query: "${intent.rawQuery}"`
           : '(unknown)';
 
-    const numbered = candidates
-      .map(
-        (c, i) =>
-          `${i}. "${c.title}" — channel: ${c.channel ?? 'Unknown'}, duration: ${c.duration}s`,
-      )
-      .join('\n');
+    const numbered = candidates.map((c, i) => `${i}. ${describeCandidate(c)}`).join('\n');
 
     const prompt = `You are picking the best YouTube search result for a music track. The goal is the CLEANEST, most-studio-identical audio (the listener will only hear sound — no video).
 
@@ -118,12 +196,13 @@ Candidates:
 ${numbered}
 
 Rank preferences from HIGHEST to LOWEST:
-1. "Official Audio" uploads — pure studio master, no video
-2. Uploads from "<Artist> - Topic" channels — auto-generated YouTube Music uploads, always clean studio audio
-3. "Lyric Video" or "Lyrics" from the artist or label channel — untouched studio audio with text overlay
-4. Plain title from the artist's own channel with NO video descriptor (e.g. just "Billie Jean" by "Michael Jackson") — usually the album audio, cleaner than a music video
-5. "Official Music Video" — may have intros, outros, dialogue, sound effects, or edits that differ from the studio recording
-6. Anything else
+1. [CATALOG] entries — the official studio recording from the YouTube Music catalog (same master as Spotify/Apple Music). Pick one whenever its title and artist match the intended track. Only skip catalog entries when the user clearly wants something the catalog doesn't hold (a DJ set, live set, podcast, mix, specific remix, or a non-music video), or when none of them is actually the intended track.
+2. "Official Audio" uploads — pure studio master, no video
+3. Uploads from "<Artist> - Topic" channels — auto-generated YouTube Music uploads, always clean studio audio
+4. "Lyric Video" or "Lyrics" from the artist or label channel — untouched studio audio with text overlay
+5. Plain title from the artist's own channel with NO video descriptor (e.g. just "Billie Jean" by "Michael Jackson") — usually the album audio, cleaner than a music video
+6. "Official Music Video" — may have intros, outros, dialogue, sound effects, or edits that differ from the studio recording
+7. Anything else
 
 KEY RULE: a plain upload from the artist channel (no "video" in the title) is BETTER than an Official Music Video. Music videos often have production overlays that hurt audio-only listening.
 
@@ -143,7 +222,7 @@ Return ONLY a JSON object: {"pick": <0-based index>, "reason": "<short reason>"}
     try {
       const result = await this.model.generateContent({
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.1, maxOutputTokens: 256 },
+        generationConfig: { temperature: 0.1, maxOutputTokens: TOKEN_BUDGET.pickSingle },
       });
 
       const text = result.response.text().trim();
@@ -172,7 +251,7 @@ Return ONLY a JSON object: {"pick": <0-based index>, "reason": "<short reason>"}
   async pickBestBatch(
     items: Array<{
       intent: { title: string; artist: string };
-      candidates: Array<{ title: string; channel?: string; duration: number }>;
+      candidates: PickCandidate[];
     }>,
   ): Promise<Array<number | null>> {
     if (items.length === 0) return [];
@@ -183,7 +262,7 @@ Return ONLY a JSON object: {"pick": <0-based index>, "reason": "<short reason>"}
     const sections = items
       .map((item, i) => {
         const candidatesText = item.candidates
-          .map((c, j) => `  ${j}. "${c.title}" — ${c.channel ?? 'Unknown'}, ${c.duration}s`)
+          .map((c, j) => `  ${j}. ${describeCandidate(c)}`)
           .join('\n');
         return `Track ${i}: "${item.intent.title}" by ${item.intent.artist}\n${candidatesText}`;
       })
@@ -194,12 +273,13 @@ Return ONLY a JSON object: {"pick": <0-based index>, "reason": "<short reason>"}
 ${sections}
 
 For EACH track, rank preferences from HIGHEST to LOWEST:
-1. "Official Audio" uploads — pure studio master, no video
-2. Uploads from "<Artist> - Topic" channels — auto-generated YouTube Music uploads, always clean studio audio
-3. "Lyric Video" or "Lyrics" from the artist or label channel — untouched studio audio with text overlay
-4. Plain title from the artist's own channel with NO video descriptor (e.g. just "Billie Jean" by "Michael Jackson") — usually the album audio, cleaner than a music video
-5. "Official Music Video" — may have intros, outros, dialogue, sound effects, or edits that differ from the studio recording
-6. Anything else
+1. [CATALOG] entries — the official studio recording from the YouTube Music catalog (same master as Spotify/Apple Music). Pick one whenever its title and artist match the intended track. Only skip catalog entries when the user clearly wants something the catalog doesn't hold (a DJ set, live set, podcast, mix, specific remix, or a non-music video), or when none of them is actually the intended track.
+2. "Official Audio" uploads — pure studio master, no video
+3. Uploads from "<Artist> - Topic" channels — auto-generated YouTube Music uploads, always clean studio audio
+4. "Lyric Video" or "Lyrics" from the artist or label channel — untouched studio audio with text overlay
+5. Plain title from the artist's own channel with NO video descriptor (e.g. just "Billie Jean" by "Michael Jackson") — usually the album audio, cleaner than a music video
+6. "Official Music Video" — may have intros, outros, dialogue, sound effects, or edits that differ from the studio recording
+7. Anything else
 
 KEY RULE: a plain upload from the artist channel (no "video" in the title) is BETTER than an Official Music Video. Music videos often have production overlays that hurt audio-only listening.
 
@@ -222,7 +302,7 @@ Return ONLY a JSON object of this exact shape (no markdown):
     try {
       const result = await this.model.generateContent({
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.1, maxOutputTokens: 4096 },
+        generationConfig: { temperature: 0.1, maxOutputTokens: TOKEN_BUDGET.pickBatch },
       });
 
       const text = result.response.text().trim();
@@ -288,7 +368,7 @@ Return ONLY a JSON object of this exact shape (no markdown):
         systemInstruction: SYSTEM_PROMPT,
         generationConfig: {
           temperature: 0.7,
-          maxOutputTokens: 1024,
+          maxOutputTokens: TOKEN_BUDGET.interpret,
         },
       });
 
@@ -354,7 +434,7 @@ Return ONLY valid JSON in this exact shape, no markdown fences:
         contents: [{ role: 'user', parts: [{ text: refinePrompt }] }],
         generationConfig: {
           temperature: 0.5,
-          maxOutputTokens: 2048,
+          maxOutputTokens: TOKEN_BUDGET.refine,
         },
       });
 
@@ -409,7 +489,7 @@ Return ONLY valid JSON in this exact shape, no markdown fences:
         contents: [{ role: 'user', parts: [{ text: refinePrompt }] }],
         generationConfig: {
           temperature: 0.7,
-          maxOutputTokens: 2048,
+          maxOutputTokens: TOKEN_BUDGET.refine,
         },
       });
 
@@ -429,31 +509,72 @@ Return ONLY valid JSON in this exact shape, no markdown fences:
     }
   }
 
-  async curatePlaylst(theme: string): Promise<GeminiPlaylistAction> {
+  async curatePlaylst(
+    theme: string,
+    pools: ThemePools = {},
+    recentShare = DEFAULT_RECENT_SHARE,
+  ): Promise<GeminiPlaylistAction> {
     const correlationId = createCorrelationId();
-    log.debug({ correlationId, theme }, 'Curating playlist');
+    const recent = pools.recent ?? [];
+    const classic = pools.classic ?? [];
+    const total = recent.length + classic.length;
+    log.debug(
+      { correlationId, theme, recent: recent.length, classic: classic.length, recentShare },
+      'Curating playlist',
+    );
+
+    const list = (tracks: Array<{ title: string; artist?: string }>) =>
+      tracks.map((t, i) => `${i + 1}. "${t.title}" — ${t.artist ?? 'Unknown'}`).join('\n');
+
+    let poolPrompt: string;
+    if (total === 0) {
+      poolPrompt = `Create a playlist for the theme: "${theme}"`;
+    } else if (recent.length === 0 || classic.length === 0) {
+      poolPrompt = `Create a playlist for the theme: "${theme}".
+
+These tracks come from REAL playlists that listeners made for this theme. They are known to exist:
+${list(recent.length ? recent : classic)}
+
+Build the playlist mainly from that list: pick the 12-15 that best fit the theme and order them so the set flows. Copy each title and artist EXACTLY as written above. Only add a track of your own if fewer than 10 of these genuinely fit, and never repeat an artist more than twice.`;
+    } else {
+      const recentCount = Math.round((12 * recentShare) / 100);
+      poolPrompt = `Create a playlist for the theme: "${theme}".
+
+All tracks below come from REAL playlists and are known to exist. They are split into two groups.
+
+CURRENT (released recently, from this year's playlists):
+${list(recent)}
+
+ESTABLISHED (the wider catalogue for this theme, any era):
+${list(classic)}
+
+Build a 12-15 track playlist that is about ${recentShare}% CURRENT and ${100 - recentShare}% ESTABLISHED — roughly ${recentCount} from CURRENT and the rest from ESTABLISHED. Do not group them: interleave so the set flows as one listening experience. Copy each title and artist EXACTLY as written above, never repeat an artist more than twice, and do not invent tracks that are not listed.`;
+    }
 
     try {
       const result = await this.model.generateContent({
         contents: [
           {
             role: 'user',
-            parts: [{ text: `Create a playlist for the theme: "${theme}"` }],
+            parts: [{ text: poolPrompt }],
           },
         ],
-        systemInstruction: SYSTEM_PROMPT,
+        systemInstruction: PLAYLIST_BUILDER_PROMPT,
         generationConfig: {
-          temperature: 0.9,
-          maxOutputTokens: 2048,
+          temperature: total > 0 ? 0.4 : 0.9,
+          maxOutputTokens: TOKEN_BUDGET.playlist,
         },
       });
 
       const text = result.response.text().trim();
       const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '');
       const parsed = JSON.parse(cleaned) as GeminiPlaylistAction;
+      const tracks = (parsed.tracks ?? []).filter((t): t is { title: string; artist: string } =>
+        Boolean(t?.title && t?.artist),
+      );
 
-      log.debug({ correlationId, trackCount: parsed.tracks?.length }, 'Playlist curated');
-      return parsed;
+      log.debug({ correlationId, trackCount: tracks.length }, 'Playlist curated');
+      return { action: 'playlist', message: parsed.message ?? '', tracks };
     } catch (error) {
       log.error({ correlationId, error }, 'Playlist curation failed');
       return {
