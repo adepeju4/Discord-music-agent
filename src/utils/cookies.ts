@@ -19,8 +19,14 @@ export const LOGIN_COOKIE_NAMES = [
   'LOGIN_INFO',
 ];
 
-/** Domains yt-dlp actually needs to authenticate with YouTube. */
-export const YOUTUBE_COOKIE_DOMAINS = ['youtube.com', 'google.com', 'googlevideo.com'];
+/**
+ * Only youtube.com. The same session cookies (SID, SAPISID, __Secure-1PSID …)
+ * are set on google.com as well, but that copy travels with Gmail, Drive and
+ * account-management cookies. yt-dlp authenticates perfectly well from the
+ * youtube.com set alone, so keeping google.com would hand a server access to
+ * the whole Google account for no benefit.
+ */
+export const YOUTUBE_COOKIE_DOMAINS = ['youtube.com'];
 
 export function isYouTubeDomain(domain: string, allowed = YOUTUBE_COOKIE_DOMAINS): boolean {
   const host = domain.replace(/^\./, '').toLowerCase();

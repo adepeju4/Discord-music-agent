@@ -61,16 +61,15 @@ describe('summarizeCookies', () => {
 });
 
 describe('isYouTubeDomain', () => {
-  it('accepts YouTube and Google hosts, with or without a leading dot', () => {
-    for (const d of [
-      '.youtube.com',
-      'youtube.com',
-      'www.youtube.com',
-      '.google.com',
-      'accounts.google.com',
-      '.googlevideo.com',
-    ]) {
+  it('accepts YouTube hosts, with or without a leading dot', () => {
+    for (const d of ['.youtube.com', 'youtube.com', 'www.youtube.com', 'music.youtube.com']) {
       expect(isYouTubeDomain(d)).toBe(true);
+    }
+  });
+
+  it('rejects google.com, whose session cookies carry Gmail and Drive access', () => {
+    for (const d of ['.google.com', 'accounts.google.com', 'mail.google.com']) {
+      expect(isYouTubeDomain(d)).toBe(false);
     }
   });
 
@@ -80,7 +79,7 @@ describe('isYouTubeDomain', () => {
       'claude.ai',
       '.amazon.com',
       'notyoutube.com',
-      'google.com.evil.net',
+      'youtube.com.evil.net',
     ]) {
       expect(isYouTubeDomain(d)).toBe(false);
     }
@@ -88,17 +87,18 @@ describe('isYouTubeDomain', () => {
 });
 
 describe('filterToYouTube', () => {
-  it('keeps YouTube and Google cookies and drops the rest', () => {
+  it('keeps only YouTube cookies and drops the rest', () => {
     const jar = [
       '# Netscape HTTP Cookie File',
       line('SID'),
       line('NetflixId', 'v', '.netflix.com'),
-      line('SAPISID', 'v', '.google.com'),
+      line('SAPISID'),
+      line('GMAIL_AT', 'v', '.google.com'),
       line('sessionKey', 'v', '.claude.ai'),
     ].join('\n');
 
     const { kept, dropped } = filterToYouTube(jar);
-    expect(dropped).toBe(2);
+    expect(dropped).toBe(3);
 
     const summary = summarizeCookies(kept);
     expect(summary.names).toEqual(['SID', 'SAPISID']);

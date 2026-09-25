@@ -80,13 +80,13 @@ async function main() {
     fail(`Cookies file is empty at ${outputPath}`);
   }
 
-  // yt-dlp exports the entire browser jar. Everything outside YouTube and
-  // Google is someone else's live session and has no business in a file that
-  // gets copied to a server.
+  // yt-dlp exports the entire browser jar — thousands of cookies covering every
+  // site you are signed into. Everything outside youtube.com is a live session
+  // that has no business in a file destined for a server.
   const { kept, dropped } = filterToYouTube(readFileSync(outputPath, 'utf8'));
   if (dropped > 0) {
     writeFileSync(outputPath, kept, { mode: 0o600 });
-    info(`Removed ${dropped} cookies for unrelated sites (kept YouTube and Google only)`);
+    info(`Removed ${dropped} cookies for other sites (kept youtube.com only)`);
   }
 
   // A jar with only visitor cookies looks fine but proves nothing to YouTube,
