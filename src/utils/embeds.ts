@@ -1,6 +1,23 @@
 import { EmbedBuilder } from 'discord.js';
 import { formatDuration } from './formatters';
 
+/**
+ * Discord rejects the whole message if any embed field is over length, and the
+ * error it throws ("Received one or more errors") names neither the field nor
+ * the limit. Anything user- or model-supplied goes through these.
+ */
+const LIMIT = { title: 256, description: 4096, footer: 2048 } as const;
+
+function clamp(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length <= max ? flat : flat.slice(0, max - 1) + '\u2026';
+}
+
+function clampBlock(text: string, max: number): string {
+  // Keeps newlines, which matter for list-shaped descriptions.
+  return text.length <= max ? text : text.slice(0, max - 1) + '\u2026';
+}
+
 export interface TrackInfo {
   title: string;
   url: string;
@@ -108,10 +125,10 @@ export function collectionEmbed(
   const description = options.note ? `_${options.note}_\n\n${list}` : list;
 
   const embed = new EmbedBuilder()
-    .setTitle(heading)
-    .setDescription(description || '_empty_')
+    .setTitle(clamp(heading, LIMIT.title))
+    .setDescription(clampBlock(description || '_empty_', LIMIT.description))
     .setColor(0xfee75c)
-    .setFooter({ text: options.footer ?? `${tracks.length} tracks` });
+    .setFooter({ text: clamp(options.footer ?? `${tracks.length} tracks`, LIMIT.footer) });
   if (options.thumbnail) embed.setThumbnail(options.thumbnail);
   if (options.url) embed.setURL(options.url);
   return embed;
@@ -160,18 +177,24 @@ export function panelEmbed(state: PanelStateLike): EmbedBuilder {
         : null,
     state.volume !== undefined && state.volume !== 100 ? `Volume ${state.volume}%` : null,
   ].filter(Boolean);
-  embed.setFooter({ text: footer.join(' • ') });
+  embed.setFooter({ text: clamp(footer.join(' • '), LIMIT.footer) });
 
   if (track.thumbnail) embed.setThumbnail(track.thumbnail);
   return embed;
 }
 
 export function errorEmbed(message: string): EmbedBuilder {
-  return new EmbedBuilder().setTitle('Error').setDescription(message).setColor(0xed4245);
+  return new EmbedBuilder()
+    .setTitle('Error')
+    .setDescription(clampBlock(message, LIMIT.description))
+    .setColor(0xed4245);
 }
 
 export function infoEmbed(title: string, description: string): EmbedBuilder {
-  return new EmbedBuilder().setTitle(title).setDescription(description).setColor(0x5865f2);
+  return new EmbedBuilder()
+    .setTitle(clamp(title, LIMIT.title))
+    .setDescription(clampBlock(description, LIMIT.description))
+    .setColor(0x5865f2);
 }
 
 export function playlistEmbed(
@@ -182,8 +205,8 @@ export function playlistEmbed(
   const list = tracks.map((t, i) => `\`${i + 1}.\` ${t.title} — ${t.artist}`).join('\n');
   const description = options.note ? `_${options.note}_\n\n${list}` : list;
   return new EmbedBuilder()
-    .setTitle(`Playlist: ${theme}`)
-    .setDescription(description || '_empty_')
+    .setTitle(clamp(`Playlist: ${theme}`, LIMIT.title))
+    .setDescription(clampBlock(description || '_empty_', LIMIT.description))
     .setColor(0xfee75c)
-    .setFooter({ text: options.footer ?? `${tracks.length} tracks` });
+    .setFooter({ text: clamp(options.footer ?? `${tracks.length} tracks`, LIMIT.footer) });
 }
